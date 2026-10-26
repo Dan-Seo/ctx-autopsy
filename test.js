@@ -263,3 +263,156 @@ test('MCP servers with long or secret-sounding names keep the mcp: prefix and tr
   assert.ok(s.byTool.every(t => t.tool === 'Bash' || t.tool.startsWith('mcp:')));
   assert.ok(s.tips.some(t => t.includes('MCP')));
 });
+
+test('Bash labels keep quoted and escaped separators inside their words', () => {
+  for (const command of [
+    'cd "/work/client;CANARY_7f3;repo" && npm test',
+    "cd '/work/client|CANARY_7f3|repo' && npm test",
+    'cd "/work/client\nCANARY_7f3\nrepo" && npm test',
+    String.raw`cd /work/client\;CANARY_7f3\;repo && npm test`,
+    String.raw`FOO=hello\ CANARY_7f3 npm test`,
+    'FOO=hello\u00a0CANARY_7f3 npm test',
+    'cd /work # ;CANARY_7f3;\nnpm test',
+  ]) {
+    assert.strictEqual(bashLabel(command), 'npm test', command);
+  }
+  for (const command of [
+    'FOO=$(printf CANARY_7f3 more) npm test',
+    'FOO=`printf CANARY_7f3 more` npm test',
+    'cd /work <<EOF\nCANARY_7f3\nEOF\nnpm test',
+    'cd "/work/client;CANARY_7f3;repo',
+    '"FOO=bar" CANARY_7f3',
+  ]) assert.strictEqual(bashLabel(command), 'bash', command);
+});
+
+test('Bash labels allow only public subcommands, never arbitrary script names', () => {
+  for (const command of ['yarn acme-private-deploy', 'bun acme-deploy', 'git acme-internal', 'npm acme-internal']) {
+    const program = command.split(' ')[0];
+    assert.strictEqual(bashLabel(command), program);
+    const s = A([U('b', 'Bash', { command }), R('b', 'x'.repeat(25000))]);
+    assert.strictEqual(s.top[0].label, 'Bash  ' + program);
+  }
+  for (const command of ['npm test', 'git status', 'cargo test', 'docker compose', 'bun run']) {
+    assert.strictEqual(bashLabel(command), command);
+  }
+});
+
+test('copied history restores read state without making totals depend on file order', () => {
+  const f = { file_path: '/work/a.ts' };
+  const original = [U('r1', 'Read', f), R('r1', 'same')];
+  const resumed = [...original, U('r2', 'Read', f), R('r2', 'same')];
+  for (const rows of [[original, resumed], [resumed, original]]) {
+    const s = analyze(rows.map(lines => ({ lines: lines.map(JSON.stringify) })));
+    assert.strictEqual(s.summary.toolResults, 2);
+    assert.strictEqual(s.summary.textChars, 8);
+    assert.strictEqual(s.rereads.count, 1);
+    assert.strictEqual(s.summary.flaggedChars, 4);
+  }
+  const compacted = [...original, { type: 'system', subtype: 'compact_boundary' }, U('r3', 'Read', f), R('r3', 'same')];
+  const s = analyze([original, compacted].map(lines => ({ lines: lines.map(JSON.stringify) })));
+  assert.strictEqual(s.rereads.count, 0, 'a copied read must still expire at compaction');
+  const changed = [...original, U('r4', 'Read', f), R('r4', 'changed')];
+  assert.strictEqual(analyze([original, changed].map(lines => ({ lines: lines.map(JSON.stringify) }))).rereads.count, 0);
+  const failed = [U('err', 'Read', f), R('err', 'same', { is_error: true })];
+  const afterFailure = [...failed, U('ok', 'Read', f), R('ok', 'same')];
+  assert.strictEqual(analyze([failed, afterFailure].map(lines => ({ lines: lines.map(JSON.stringify) }))).rereads.count, 0);
+  const old = original.map(row => ({ ...row, timestamp: '2020-01-01T00:00:00Z' }));
+  const recent = [...old, ...resumed.slice(-2).map(row => ({ ...row, timestamp: '2026-10-20T00:00:00Z' }))];
+  for (const rows of [[old, recent], [recent, old]]) {
+    const report = analyze(rows.map(lines => ({ lines: lines.map(JSON.stringify) })), { since: Date.parse('2026-01-01T00:00:00Z') });
+    assert.strictEqual(report.summary.toolResults, 1);
+    assert.strictEqual(report.rereads.count, 1);
+  }
+});
+
+test('structured search text is measured, and unknown nested blocks mark incomplete results', () => {
+  const search = { type: 'search_result', source: 'https://example.com', title: 'Result',
+    content: [{ type: 'text', text: 'x'.repeat(25000) }] };
+  const measured = A([U('a', 'mcp__demo__search', {}), R('a', [search])]);
+  assert.strictEqual(measured.summary.textChars, 25000);
+  assert.strictEqual(measured.summary.flaggedChars, 25000);
+  assert.strictEqual(measured.meta.suspect, false);
+  const unknown = A([U('a', 'mcp__demo__search', {}), R('a', [
+    { type: 'text', text: 'known' }, { type: 'future_result', text: 'CANARY_7f3' },
+    { ...search, content: [{ type: 'future_nested', text: 'CANARY_7f3' }] },
+  ])]);
+  assert.strictEqual(unknown.summary.textChars, 5);
+  assert.strictEqual(unknown.meta.unknownBlockTypes.future_result, 1);
+  assert.strictEqual(unknown.meta.unknownBlockTypes.future_nested, 1);
+  assert.strictEqual(unknown.meta.suspect, true);
+  assert.ok(!JSON.stringify(unknown).includes('CANARY_7f3'));
+  const old = [U('old', 'Bash', {}), R('old', [{ type: 'future_result' }])]
+    .map(row => ({ ...row, timestamp: '2020-01-01T00:00:00Z' }));
+  assert.strictEqual(A(old, { since: Date.parse('2026-01-01T00:00:00Z') }).meta.suspect, false);
+});
+
+test('nested content handles media, malformed blocks and deep wrappers without leaking data', () => {
+  const mixed = A([U('a', 'Bash', {}), R('a', [
+    { type: 'text', text: 'known' },
+    { type: 'image', source: { type: 'base64', data: 'CANARY_7f3' } },
+    { type: 'document', source: { type: 'base64', data: 'CANARY_7f3' } },
+  ])]);
+  assert.strictEqual(mixed.summary.textChars, 5);
+  assert.strictEqual(mixed.summary.images, 2);
+  assert.strictEqual(mixed.meta.suspect, false);
+  assert.ok(!JSON.stringify(mixed).includes('CANARY_7f3'));
+  for (const content of [
+    { text: 'CANARY_7f3' },
+    [{ type: 'search_result', content: { text: 'CANARY_7f3' } }],
+    [{ type: 'text', text: { private: 'CANARY_7f3' } }],
+    [{ type: '/home/CANARY_7f3/data' }],
+  ]) {
+    const s = A([U('a', 'Bash', {}), R('a', content)]);
+    assert.strictEqual(s.summary.textChars, 0);
+    assert.strictEqual(s.meta.suspect, true);
+    assert.ok(!JSON.stringify(s).includes('CANARY_7f3'));
+  }
+  const nested = '{"type":"search_result","content":['.repeat(12000) + '{"type":"text","text":"ok"}' + ']}'.repeat(12000);
+  const deep = analyze([{ lines: [JSON.stringify(U('deep', 'Bash', {})),
+    '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"deep","content":[' + nested + ']}]}}'] }]);
+  assert.strictEqual(deep.summary.textChars, 2);
+  assert.strictEqual(deep.meta.badLines, 0);
+  const partial = [{ type: 'text', text: 'same' }, { type: 'future_result' }];
+  const f = { file_path: '/work/a.ts' };
+  assert.strictEqual(A([U('r1', 'Read', f), R('r1', partial), U('r2', 'Read', f), R('r2', partial)]).rereads.count, 0);
+});
+
+test('first-request input is not described as context before the user message', async () => {
+  const r = run(['--days', '36500']);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /First-request input:.*includes your message/);
+  assert.doesNotMatch(r.stdout, /before your first message/i);
+  const s = analyze(await loadFixtures());
+  assert.strictEqual(s.startingContext.medianTokens, 60704, 'keep the existing JSON field and usage sum');
+  assert.ok(s.tips.some(t => t.includes('includes your message')));
+});
+
+test('unreadable root fails; unreadable subdirectories produce an explicit partial report', () => {
+  const runDenied = (relative, args) => spawnSync(process.execPath, ['-e', `
+    const fs = require('node:fs'), path = require('node:path');
+    const { main } = require(process.argv[1]);
+    const denied = path.resolve(process.env.CLAUDE_CONFIG_DIR, process.argv[2]);
+    const read = fs.readdirSync;
+    fs.readdirSync = function(dir, ...args) {
+      if (path.resolve(dir) === denied) throw Object.assign(new Error('CANARY_7f3'), { code: 'EACCES' });
+      return read.call(this, dir, ...args);
+    };
+    main(process.argv.slice(3)).then(code => { process.exitCode = code; });
+  `, path.join(__dirname, 'cli.js'), relative, ...args],
+  { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: FIX, DEBUG: '1' } });
+  const root = runDenied('projects', ['--json']);
+  assert.strictEqual(root.status, 1);
+  assert.strictEqual(root.stdout, '');
+  assert.match(root.stderr, /cannot read.*session folder/i);
+  assert.ok(!root.stderr.includes('CANARY_7f3'));
+  assert.ok(!root.stderr.includes(FIX), 'even DEBUG must not print the directory or error stack');
+  const partial = runDenied('projects/C--work-demo-shop', ['--days', '36500', '--json']);
+  assert.strictEqual(partial.status, 0);
+  const s = JSON.parse(partial.stdout);
+  assert.strictEqual(s.meta.skippedDirectories, 1);
+  assert.strictEqual(s.meta.suspect, true);
+  assert.ok(!partial.stdout.includes('CANARY_7f3'));
+  const rendered = runDenied('projects/C--work-demo-shop', ['--days', '36500']);
+  assert.match(rendered.stdout, /unreadable directories 1/);
+  assert.match(rendered.stdout, /incomplete|unreliable/);
+});

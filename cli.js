@@ -16,7 +16,7 @@ const MAX_LINE = 4 * 1024 * 1024; // longer lines are skipped, never buffered
 const BIG = 20000;                // a single tool result this many chars or more is "oversized"
 const TOP_N = 10;
 const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use', 'tool_result',
-  'image', 'document', 'server_tool_use', 'web_search_tool_result', 'web_fetch_tool_result']);
+  'image', 'document', 'search_result', 'server_tool_use', 'web_search_tool_result', 'web_fetch_tool_result']);
 
 // ---------- redaction: every label shown to the user is built here ----------
 
@@ -28,19 +28,82 @@ function clean(s) {
   return s.length > 40 || SECRETISH.test(s) ? '<redacted>' : s;
 }
 
-// Tools whose second word is a subcommand (npm test, git status). For anything else only the program is shown.
-const SUBCOMMANDS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'git', 'cargo', 'go', 'docker',
-  'kubectl', 'gh', 'dotnet', 'mvn', 'gradle', 'uv', 'poetry', 'deno', 'pip', 'pip3', 'brew']);
+// Only public subcommands are safe to display; runners also accept private script names here.
+const SUBCOMMANDS = new Map(Object.entries({
+  npm: 'install ci test run exec init update uninstall audit ls view pack publish',
+  pnpm: 'install add remove update run test exec dlx build audit list',
+  yarn: 'install add remove up run test build exec dlx workspace workspaces',
+  bun: 'install add remove update run test build x',
+  git: 'status diff log show add commit checkout switch branch merge rebase reset restore clean fetch pull push clone init remote config tag stash worktree',
+  cargo: 'build test run check fmt clippy doc bench clean update add',
+  go: 'build test run vet fmt mod get install version env clean',
+  docker: 'build run compose ps images image container logs exec pull push inspect stop start',
+  kubectl: 'get describe apply delete logs exec rollout config version top',
+  gh: 'pr issue repo api auth release run workflow',
+  dotnet: 'build test run restore publish new clean format tool',
+  mvn: 'clean compile test package verify install deploy',
+  gradle: 'build test clean assemble check tasks',
+  uv: 'run sync add remove lock pip venv python tool',
+  poetry: 'install add remove update run build publish lock show',
+  deno: 'run test task check fmt lint compile install add',
+  pip: 'install uninstall list show freeze check download wheel',
+  pip3: 'install uninstall list show freeze check download wheel',
+  brew: 'install uninstall update upgrade list info services',
+}).map(([program, commands]) => [program, new Set(commands.split(' '))]));
+
+// A bounded lexer for simple commands, not a shell interpreter. Ambiguous syntax returns no label.
+function commandWords(cmd) {
+  if (typeof cmd !== 'string' || cmd.length > 2000) return null;
+  let words = [], word = '', quote = '', started = false, plain = true, assignment = false;
+  const endWord = () => {
+    if (started) words.push({ word, assignment });
+    word = ''; started = false; plain = true; assignment = false;
+  };
+  const endCommand = () => {
+    endWord();
+    const first = words.findIndex(w => !w.assignment);
+    const command = first < 0 || words[first].word === 'cd' ? null : words.slice(first).map(w => w.word);
+    words = [];
+    return command;
+  };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    // Expansions can contain nested commands and quotes; never guess their executable or arguments.
+    if (quote !== "'" && (c === '$' || c === '`')) return null;
+    if (c === '\\' && quote !== "'") {
+      const next = cmd[i + 1];
+      if (next === undefined) return null;
+      if (quote === '"' && !['$', '`', '"', '\\', '\n'].includes(next)) { word += c; continue; }
+      i++;
+      if (next !== '\n') { word += next; started = true; plain = false; }
+      continue;
+    }
+    if (quote) { if (c === quote) quote = ''; else word += c; continue; }
+    if (c === '"' || c === "'") { quote = c; started = true; plain = false; continue; }
+    if (';|&\n'.includes(c)) {
+      const command = endCommand();
+      if (command) return command;
+      continue;
+    }
+    if (c === ' ' || c === '\t') { endWord(); continue; }
+    if (c === '#' && !started) {
+      while (i + 1 < cmd.length && cmd[i + 1] !== '\n') i++;
+      continue;
+    }
+    if ('<>()'.includes(c)) return null;
+    if (c === '=' && plain && /^[A-Za-z_][A-Za-z0-9_]*$/.test(word)) assignment = true;
+    word += c; started = true;
+  }
+  return quote ? null : endCommand();
+}
 
 // "cd x && FOO=1 npm test -- --x" -> "npm test". Arguments are never shown.
 function bashLabel(cmd) {
-  const seg = (typeof cmd === 'string' ? cmd.slice(0, 2000) : '').split(/&&|\|\||;|\||\n/).map(s => s.trim()).find(s => s && !/^cd(\s|$)/.test(s)) || '';
-  // skip FOO=1 / FOO="a b" prefixes, keep a quoted program path whole
-  const m = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*("[^"]*"|'[^']*'|\S+)(?:\s+(\S+))?/.exec(seg);
-  if (!m || m[1].includes('=')) return 'bash';
-  const prog = path.basename(m[1].replace(/^["']|["']$/g, '').replace(/\\/g, '/')).replace(/\.(exe|cmd|bat)$/i, '');
+  const words = commandWords(cmd);
+  if (!words || words[0].includes('=')) return 'bash';
+  const prog = path.basename(words[0].replace(/\\/g, '/')).replace(/\.(exe|cmd|bat)$/i, '');
   if (!/^[A-Za-z0-9._+-]{1,30}$/.test(prog)) return 'bash';
-  const sub = SUBCOMMANDS.has(prog) && m[2] && /^[a-z][a-z0-9:-]{0,20}$/.test(m[2]) ? ' ' + m[2] : '';
+  const sub = SUBCOMMANDS.get(prog)?.has(words[1]) ? ' ' + words[1] : '';
   return clean(prog + sub);
 }
 
@@ -67,7 +130,7 @@ function resultLabel(name, input, isError) {
 function newReport(opts = {}) {
   return {
     since: opts.since || 0,
-    files: 0, sessions: 0, subagentFiles: 0, skippedFiles: 0,
+    files: 0, sessions: 0, subagentFiles: 0, skippedFiles: 0, skippedDirectories: 0,
     lines: 0, badLines: 0, oversizeLines: 0, unpaired: 0,
     unknownBlocks: Object.create(null), ccMin: null, ccMax: null,
     counted: new Set(),    // tool_use ids already counted, across files
@@ -75,7 +138,7 @@ function newReport(opts = {}) {
     byTool: new Map(),     // group -> {calls, chars}
     top: [],               // [{label, chars}]
     rereads: { count: 0, chars: 0, files: new Map() },
-    startCtx: [],          // first-turn prompt tokens per main session
+    startCtx: [],          // first-request input tokens, including the user's message, per main session
   };
 }
 
@@ -92,15 +155,30 @@ function verCmp(a, b) {
 }
 
 // Text length, image count, and a hash of the text (to tell a real re-read from a changed file).
-function resultText(content) {
+function resultText(content, onUnknown) {
   const h = createHash('sha1');
-  if (typeof content === 'string') return { chars: content.length, images: 0, hash: h.update(content).digest('hex') };
-  let chars = 0, images = 0;
-  if (Array.isArray(content)) for (const c of content) {
+  if (typeof content === 'string') return { chars: content.length, images: 0, hash: h.update(content).digest('hex'), complete: true };
+  let chars = 0, images = 0, complete = true;
+  const unknown = type => { complete = false; onUnknown(type); };
+  const stack = Array.isArray(content) ? [{ blocks: content, index: 0 }] : [];
+  if (content != null && !Array.isArray(content)) unknown('invalid_tool_result_content');
+  while (stack.length) {
+    const frame = stack[stack.length - 1];
+    if (frame.index === frame.blocks.length) { stack.pop(); continue; }
+    const c = frame.blocks[frame.index++];
     if (c && c.type === 'text' && typeof c.text === 'string') { chars += c.text.length; h.update(c.text); }
     else if (c && (c.type === 'image' || c.type === 'document')) images++; // base64 is never counted
+    else if (c && c.type === 'search_result' && Array.isArray(c.content)) {
+      stack.push({ blocks: c.content, index: 0 });
+    } else unknown(c && typeof c.type === 'string' ? c.type : 'invalid_tool_result_block');
   }
-  return { chars, images, hash: h.digest('hex') };
+  return { chars, images, hash: h.digest('hex'), complete };
+}
+
+function unknownBlock(r, type, inWindow) {
+  if (!inWindow) return;
+  const label = /^[A-Za-z0-9_.:-]{1,40}$/.test(type) ? clean(type) : '<redacted>';
+  r.unknownBlocks[label] = (r.unknownBlocks[label] || 0) + 1;
 }
 
 function pushTop(top, item) {
@@ -142,7 +220,7 @@ function feedRecord(r, st, o) {
     }
     for (const b of m.content) {
       if (!b || typeof b.type !== 'string') continue;
-      if (!KNOWN_BLOCKS.has(b.type)) { if (inWindow) r.unknownBlocks[clean(b.type)] = (r.unknownBlocks[clean(b.type)] || 0) + 1; continue; }
+      if (!KNOWN_BLOCKS.has(b.type)) { unknownBlock(r, b.type, inWindow); continue; }
       if (b.type === 'tool_use' && typeof b.id === 'string') st.uses.set(b.id, { name: b.name, input: b.input });
     }
     return;
@@ -150,22 +228,22 @@ function feedRecord(r, st, o) {
 
   for (const b of m.content) {
     if (!b || typeof b.type !== 'string') continue;
-    if (!KNOWN_BLOCKS.has(b.type)) { if (inWindow) r.unknownBlocks[clean(b.type)] = (r.unknownBlocks[clean(b.type)] || 0) + 1; continue; }
+    if (!KNOWN_BLOCKS.has(b.type)) { unknownBlock(r, b.type, inWindow); continue; }
     if (b.type !== 'tool_result') continue;
     const use = st.uses.get(b.tool_use_id);
     if (!use) { if (inWindow) r.unpaired++; continue; }
     st.uses.delete(b.tool_use_id);
-    if (r.counted.has(b.tool_use_id)) continue; // copied history of a resumed session
+    const duplicate = r.counted.has(b.tool_use_id);
     r.counted.add(b.tool_use_id);
 
-    const { chars, images, hash } = resultText(b.content);
-    // Reads are tracked even outside the window so a re-read just inside it is still recognized.
+    const { chars, images, hash, complete } = resultText(b.content, type => unknownBlock(r, type, inWindow && !duplicate));
+    // Restore each context's read history even for copied results or results before the window.
     const fp = use.name === 'Read' && use.input && typeof use.input.file_path === 'string' ? use.input.file_path : null;
-    const readKey = fp && !b.is_error && chars > 0 && !images
+    const readKey = fp && !b.is_error && complete && chars > 0 && !images
       ? [fp, num(use.input.offset), num(use.input.limit)].join('|') : null;
     const reread = !!readKey && st.reads.get(readKey) === hash; // same range, identical text: nothing changed
     if (readKey) st.reads.set(readKey, hash);
-    if (!inWindow) continue;
+    if (!inWindow || duplicate) continue; // copied history updates state but is only measured once
 
     r.images += images;
     r.results++;
@@ -212,7 +290,7 @@ function tips(s) {
   if (read && read.pct >= 20) out.push('Read output is a big share. Ask for line ranges (Read with offset/limit) instead of whole files.');
   if (s.rereads.count) out.push('Unchanged files were re-read. Put the key facts in CLAUDE.md or point Claude at exact lines.');
   if (s.byTool.some(t => t.tool.startsWith('mcp:') && t.pct >= 10)) out.push('An MCP server returns a lot of text. /usage shows its share; turn off unused servers with /mcp.');
-  if (s.startingContext.medianTokens) out.push('Context already loaded before your first message: run /context to see CLAUDE.md, MCP and skill sizes.');
+  if (s.startingContext.medianTokens) out.push('First-request input includes your message. Use /context to inspect CLAUDE.md, MCP and skill sizes.');
   return out;
 }
 
@@ -234,12 +312,13 @@ function summarize(r) {
     meta: {
       node: process.version, platform: process.platform,
       claudeCodeVersions: r.ccMin ? [r.ccMin, r.ccMax] : null,
-      files: r.files, skippedFiles: r.skippedFiles, lines: r.lines, badLines: r.badLines,
+      files: r.files, skippedFiles: r.skippedFiles, skippedDirectories: r.skippedDirectories, lines: r.lines, badLines: r.badLines,
       oversizeLines: r.oversizeLines, unpairedToolResults: r.unpaired, unknownBlockTypes: r.unknownBlocks,
     },
   };
   s.tips = tips(s);
-  s.meta.suspect = r.unpaired > r.results * 0.1 || Object.keys(r.unknownBlocks).length > 0;
+  s.meta.suspect = r.unpaired > r.results * 0.1 || Object.keys(r.unknownBlocks).length > 0 ||
+    r.skippedFiles > 0 || r.skippedDirectories > 0;
   return s;
 }
 
@@ -273,14 +352,18 @@ async function* readLines(file, size) {
   else if (rest) yield emit(rest); // last line without newline (may be half-written: then it is just a bad line)
 }
 
-function findFiles(dir, depth = 0, out = []) {
+function findFiles(dir, onUnreadable, depth = 0, out = []) {
   if (depth > 4) return out;
   let ents;
-  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) {
+    if (depth === 0) throw e;
+    onUnreadable();
+    return out;
+  }
   for (const e of ents) {
     if (e.isSymbolicLink()) continue;
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) findFiles(p, depth + 1, out);
+    if (e.isDirectory()) findFiles(p, onUnreadable, depth + 1, out);
     else if (e.isFile() && e.name.endsWith('.jsonl')) out.push(p);
   }
   return out;
@@ -319,7 +402,7 @@ function render(s, days, tty) {
     }
   }
   if (sm.images) L.push('', dim(`Images/PDFs in tool results: ${sm.images} (not counted above)`));
-  if (s.startingContext.medianTokens) L.push(dim(`Context before your first message: median ${k(s.startingContext.medianTokens)} tokens over ${s.startingContext.sessions} sessions`));
+  if (s.startingContext.medianTokens) L.push(dim(`First-request input: median ${k(s.startingContext.medianTokens)} tokens over ${s.startingContext.sessions} sessions (includes your message)`));
   if (s.tips.length) {
     L.push('', b('Try'));
     for (const t of s.tips) L.push(`  - ${t}`);
@@ -328,8 +411,9 @@ function render(s, days, tty) {
   L.push('', dim(`Parsed ${m.lines} lines in ${m.files} files` +
     (m.claudeCodeVersions ? ` · Claude Code ${m.claudeCodeVersions.join('–')}` : '') +
     ` · bad ${m.badLines} · oversize ${m.oversizeLines} · unpaired ${m.unpairedToolResults}` +
-    (m.skippedFiles ? ` · unreadable files ${m.skippedFiles}` : '')));
-  if (m.suspect) L.push('⚠ Log format may have changed; numbers may be unreliable. To report it, paste only the "meta" block of: npx ctx-autopsy --json');
+    (m.skippedFiles ? ` · unreadable files ${m.skippedFiles}` : '') +
+    (m.skippedDirectories ? ` · unreadable directories ${m.skippedDirectories}` : '')));
+  if (m.suspect) L.push('⚠ Some log data could not be analyzed; numbers may be incomplete or unreliable. To report it, paste only the "meta" block of: npx ctx-autopsy --json');
   return L.join('\n');
 }
 
@@ -359,7 +443,13 @@ async function main(argv) {
 
   const since = Date.now() - days * 864e5;
   const r = newReport({ since });
-  for (const f of findFiles(root)) {
+  let files;
+  try { files = findFiles(root, () => { r.skippedDirectories++; }); }
+  catch {
+    process.stderr.write('ctx-autopsy: cannot read Claude Code session folder. Check its location and access permissions.\n');
+    return 1;
+  }
+  for (const f of files) {
     let size;
     try { const st = fs.statSync(f); if (st.mtimeMs < since) continue; size = st.size; } catch { r.skippedFiles++; continue; }
     const sub = path.relative(root, f).split(path.sep).includes('subagents');

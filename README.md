@@ -39,24 +39,29 @@ Requires Node 22+. Zero dependencies. Reads `$CLAUDE_CONFIG_DIR/projects` (defau
   as an earlier read of the same file range (no compaction in between). Each result is counted once.
   Failed reads are not counted as re-reads.
 - Token figures are rough (`chars / 3`, ±50%). Korean, Japanese and Chinese text uses more tokens per character.
-- Images and PDFs are counted, not measured. The system prompt, CLAUDE.md, and other context that loads
-  before your first message are shown as one line; use `/context` for the details.
+- Images and PDFs are counted, not measured. Text inside structured `search_result` blocks is measured too.
+- The first-request input line includes your first message, attachments and preloaded context;
+  it does not isolate the system prompt or CLAUDE.md. Use `/context` for the details.
+  The JSON field `startingContext` retains its name for compatibility and reports this same total.
 - Subagent logs are separate contexts: their tool results are included in the totals, while re-reads are tracked
-  per context and the starting-context line uses main sessions only.
+  per context and the first-request input line uses main sessions only.
 - If a resumed session copied earlier history into a new log, each tool result is still counted once.
 
 ## Privacy
 
 - Runs locally. No network access, no telemetry, never writes files.
 - Output shows file **names** only (no folders). Bash commands show only the program name (`curl`, `python`),
-  plus the subcommand for tools like npm, git, cargo, docker (`npm test`, `git status`). Arguments are never shown.
+  plus a recognized public subcommand (`npm test`, `git status`). Custom script names and arguments are never shown.
+  Complex shell syntax that cannot be safely identified is labeled `bash`.
 - Session content is never printed, including in error messages.
 - Reporting a bug? Paste the `meta` block of `npx ctx-autopsy --json`. Please do not attach `.jsonl` files.
 
 ## Limits
 
 The session log format is not a public API and may change between Claude Code versions.
-The footer shows which versions were parsed, and a warning appears when unknown structures show up.
+The footer shows which versions were parsed, and a warning appears when unknown structures show up,
+including inside tool results. Unreadable files and subdirectories also produce a warning;
+the JSON `meta.skippedDirectories` field counts directory traversal failures. An unreadable session root exits with an error.
 
 ## License
 

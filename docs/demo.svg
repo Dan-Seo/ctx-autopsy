@@ -32,13 +32,13 @@
   <text x="24" y="520" class="t" xml:space="preserve">     1x  pricing.ts</text>
   
   <text x="24" y="562" class="d" xml:space="preserve">Images/PDFs in tool results: 1 (not counted above)</text>
-  <text x="24" y="583" class="d" xml:space="preserve">Context before your first message: median 61k tokens over 2 sessions</text>
+  <text x="24" y="583" class="d" xml:space="preserve">First-request input: median 61k tokens over 2 sessions (includes your message)</text>
   
   <text x="24" y="625" class="h" xml:space="preserve">Try</text>
   <text x="24" y="646" class="t" xml:space="preserve">  - Bash output is a big share. Prefer quiet runners (pytest -q, vitest --reporter=dot). If you pipe, keep the</text>
   <text x="24" y="667" class="t" xml:space="preserve">      exit code: set -o pipefail; npm test 2&gt;&amp;1 | tail -50</text>
   <text x="24" y="688" class="t" xml:space="preserve">  - Read output is a big share. Ask for line ranges (Read with offset/limit) instead of whole files.</text>
   <text x="24" y="709" class="t" xml:space="preserve">  - Unchanged files were re-read. Put the key facts in CLAUDE.md or point Claude at exact lines.</text>
-  <text x="24" y="730" class="t" xml:space="preserve">  - Context already loaded before your first message: run /context to see CLAUDE.md, MCP and skill sizes.</text>
+  <text x="24" y="730" class="t" xml:space="preserve">  - First-request input includes your message. Use /context to inspect CLAUDE.md, MCP and skill sizes.</text>
   
 </svg>
