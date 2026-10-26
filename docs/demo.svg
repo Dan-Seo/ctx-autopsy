@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="794" viewBox="0 0 1000 794" role="img" aria-label="ctx-autopsy terminal output">
+  <style>
+    text { font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
+    .t { fill: #d4d4d8; } .d { fill: #8b8b94; } .h { fill: #f4f4f5; font-weight: 700; }
+    .hl { fill: #fbbf24; font-weight: 700; } .bar { fill: #60a5fa; }
+  </style>
+  <rect width="1000" height="794" rx="10" fill="#18181b"/>
+  <circle cx="22" cy="20" r="6" fill="#ef4444"/><circle cx="42" cy="20" r="6" fill="#eab308"/><circle cx="62" cy="20" r="6" fill="#22c55e"/>
+  <text x="500" y="25" text-anchor="middle" class="d">$ npx ctx-autopsy</text>
+  <text x="24" y="58"><tspan class="h">ctx-autopsy</tspan><tspan class="d">  last 30 days · 2 sessions · 1 subagent log · 18 tool results</tspan></text>
+  
+  <text x="24" y="100"><tspan class="hl">82.5%</tspan><tspan class="h"> of tool-output text came from oversized results (&gt;=20k chars) and re-reads</tspan></text>
+  <text x="24" y="121" class="d" xml:space="preserve">  217k of 263k chars · roughly 72k tokens (±50%)</text>
+  
+  <text x="24" y="163" class="h" xml:space="preserve">By tool</text>
+  <text x="24" y="184" xml:space="preserve"><tspan class="t">  Read          48.4%  </tspan><tspan class="bar">████████████</tspan><tspan class="d"> 127k chars · 9 calls</tspan></text>
+  <text x="24" y="205" xml:space="preserve"><tspan class="t">  Bash          41.4%  </tspan><tspan class="bar">██████████</tspan><tspan class="d"> 109k chars · 4 calls</tspan></text>
+  <text x="24" y="226" xml:space="preserve"><tspan class="t">  mcp:browser    9.1%  </tspan><tspan class="bar">██</tspan><tspan class="d"> 24k chars · 1 call</tspan></text>
+  <text x="24" y="247" xml:space="preserve"><tspan class="t">  Grep           0.9%  </tspan><tspan class="bar">█</tspan><tspan class="d"> 2k chars · 1 call</tspan></text>
+  <text x="24" y="268" xml:space="preserve"><tspan class="t">  Glob           0.2%  </tspan><tspan class="bar">█</tspan><tspan class="d"> 649 chars · 1 call</tspan></text>
+  <text x="24" y="289" xml:space="preserve"><tspan class="t">  Edit             0%  </tspan><tspan class="bar">█</tspan><tspan class="d"> 4 chars · 2 calls</tspan></text>
+  
+  <text x="24" y="331" class="h" xml:space="preserve">Largest single results</text>
+  <text x="24" y="352" class="t" xml:space="preserve">     47k  Bash  npx</text>
+  <text x="24" y="373" class="t" xml:space="preserve">     35k  Read  pricing.ts</text>
+  <text x="24" y="394" class="t" xml:space="preserve">     35k  Read  pricing.ts</text>
+  <text x="24" y="415" class="t" xml:space="preserve">     34k  Bash  npm test</text>
+  <text x="24" y="436" class="t" xml:space="preserve">     28k  Bash  npm test</text>
+  
+  <text x="24" y="478" class="h" xml:space="preserve">Re-reads of unchanged files: 2 (49k chars)</text>
+  <text x="24" y="499" class="t" xml:space="preserve">     1x  checkout.ts</text>
+  <text x="24" y="520" class="t" xml:space="preserve">     1x  pricing.ts</text>
+  
+  <text x="24" y="562" class="d" xml:space="preserve">Images/PDFs in tool results: 1 (not counted above)</text>
+  <text x="24" y="583" class="d" xml:space="preserve">Context before your first message: median 61k tokens over 2 sessions</text>
+  
+  <text x="24" y="625" class="h" xml:space="preserve">Try</text>
+  <text x="24" y="646" class="t" xml:space="preserve">  - Bash output is a big share. Prefer quiet runners (pytest -q, vitest --reporter=dot). If you pipe, keep the</text>
+  <text x="24" y="667" class="t" xml:space="preserve">      exit code: set -o pipefail; npm test 2&gt;&amp;1 | tail -50</text>
+  <text x="24" y="688" class="t" xml:space="preserve">  - Read output is a big share. Ask for line ranges (Read with offset/limit) instead of whole files.</text>
+  <text x="24" y="709" class="t" xml:space="preserve">  - Unchanged files were re-read. Put the key facts in CLAUDE.md or point Claude at exact lines.</text>
+  <text x="24" y="730" class="t" xml:space="preserve">  - Context already loaded before your first message: run /context to see CLAUDE.md, MCP and skill sizes.</text>
+  
+</svg>

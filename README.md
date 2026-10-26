@@ -1,48 +1,16 @@
 # ctx-autopsy
 
+[![npm](https://img.shields.io/npm/v/ctx-autopsy)](https://www.npmjs.com/package/ctx-autopsy) ![node](https://img.shields.io/node/v/ctx-autopsy) ![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/npm/l/ctx-autopsy)
+
 **Which tool calls filled your Claude Code context?**
 
 `npx ctx-autopsy` reads your local Claude Code session logs and ranks the tool results
 (Bash commands, file reads, MCP calls) that pushed the most text into context
 across all your sessions, including files that were re-read without changing.
 
-```
-ctx-autopsy  last 30 days · 2 sessions · 1 subagent log · 18 tool results
+![ctx-autopsy output: 82.5% of tool-output text came from oversized results and re-reads, followed by a per-tool bar chart, the largest results, re-read files and tips](https://raw.githubusercontent.com/Dan-Seo/ctx-autopsy/main/docs/demo.svg)
 
-82.5% of tool-output text came from oversized results (>=20k chars) and re-reads
-  217k of 263k chars · roughly 72k tokens (±50%)
-
-By tool
-  Read          48.4%  ████████████ 127k chars · 9 calls
-  Bash          41.4%  ██████████ 109k chars · 4 calls
-  mcp:browser    9.1%  ██ 24k chars · 1 call
-  Grep           0.9%  █ 2k chars · 1 call
-  Glob           0.2%  █ 649 chars · 1 call
-  Edit             0%  █ 4 chars · 2 calls
-
-Largest single results
-     47k  Bash  npx
-     35k  Read  pricing.ts
-     35k  Read  pricing.ts
-     34k  Bash  npm test
-     28k  Bash  npm test
-
-Re-reads of unchanged files: 2 (49k chars)
-     1x  checkout.ts
-     1x  pricing.ts
-
-Images/PDFs in tool results: 1 (not counted above)
-Context before your first message: median 61k tokens over 2 sessions
-
-Try
-  - Bash output is a big share. Prefer quiet runners (pytest -q, vitest --reporter=dot). If you pipe, keep the exit code: set -o pipefail; npm test 2>&1 | tail -50
-  - Read output is a big share. Ask for line ranges (Read with offset/limit) instead of whole files.
-  - Unchanged files were re-read. Put the key facts in CLAUDE.md or point Claude at exact lines.
-  - Context already loaded before your first message: run /context to see CLAUDE.md, MCP and skill sizes.
-
-Parsed 45 lines in 3 files · Claude Code 2.1.280–2.1.292 · bad 1 · oversize 0 · unpaired 0
-```
-<sub>Output from the synthetic sessions in `fixtures/`.</sub>
+<sub>Output from the synthetic sessions in `fixtures/`. Try it on your own: `npx ctx-autopsy`</sub>
 
 ## Usage
 
