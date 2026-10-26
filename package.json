@@ -1,0 +1,35 @@
+{
+  "name": "ctx-autopsy",
+  "version": "0.1.0",
+  "description": "See which tool calls filled your Claude Code context: biggest Bash outputs, file reads and re-reads across sessions. Local, zero-dependency.",
+  "bin": {
+    "ctx-autopsy": "cli.js"
+  },
+  "files": [
+    "cli.js"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "context",
+    "tokens",
+    "ai-agents",
+    "cli",
+    "developer-tools"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dan-Seo/ctx-autopsy.git"
+  },
+  "homepage": "https://github.com/Dan-Seo/ctx-autopsy#readme",
+  "bugs": {
+    "url": "https://github.com/Dan-Seo/ctx-autopsy/issues"
+  }
+}
