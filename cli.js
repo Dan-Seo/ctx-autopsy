@@ -230,9 +230,10 @@ function feedLine(r, st, line) {
 }
 
 function feedRecord(r, st, o) {
-  if (typeof o.version === 'string' && /^\d+\.\d+\.\d+$/.test(o.version)) {
-    if (!r.ccMin || verCmp(o.version, r.ccMin) < 0) r.ccMin = o.version;
-    if (!r.ccMax || verCmp(o.version, r.ccMax) > 0) r.ccMax = o.version;
+  const vm = typeof o.version === 'string' ? /^(\d+\.\d+\.\d+)(?:-.*)?$/.exec(o.version) : null;
+  if (vm) {
+    if (!r.ccMin || verCmp(vm[1], r.ccMin) < 0) r.ccMin = vm[1];
+    if (!r.ccMax || verCmp(vm[1], r.ccMax) > 0) r.ccMax = vm[1];
   }
   if (o.type === 'system' && o.subtype === 'compact_boundary') { st.reads.clear(); return; }
   if (o.type === 'api-request-shape' && !st.isSubagent && typeof o.shapeHash === 'string' && !st.shapes.has(o.shapeHash))
@@ -537,8 +538,9 @@ async function main(argv) {
   } catch (e) { process.stderr.write(`ctx-autopsy: ${e.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION' ? 'unknown option' : 'bad arguments'}\n${USAGE}\n`); return 2; }
   if (a.help) { process.stdout.write(USAGE + '\n'); return 0; }
   if (a.version) { process.stdout.write(VERSION + '\n'); return 0; }
-  const days = a.days === undefined ? 30 : Number(a.days);
-  if (!Number.isInteger(days) || days <= 0) { process.stderr.write(`ctx-autopsy: --days must be a positive integer\n`); return 2; }
+  const daysRaw = a.days === undefined ? '30' : a.days;
+  const days = Number(daysRaw);
+  if (!/^[0-9]+$/.test(daysRaw) || !Number.isInteger(days) || days <= 0) { process.stderr.write(`ctx-autopsy: --days must be a positive integer\n`); return 2; }
 
   const root = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
   if (!fs.existsSync(root)) {
@@ -585,7 +587,6 @@ if (require.main === module) {
   process.stdout.on('error', e => { if (e.code === 'EPIPE') process.exit(0); });
   main(process.argv.slice(2)).then(code => { process.exitCode = code; }, e => {
     process.stderr.write(`ctx-autopsy: internal error (${e && (e.code || e.name)})\n`);
-    if (process.env.DEBUG) process.stderr.write(String(e && e.stack) + '\n');
     process.exitCode = 1;
   });
 }

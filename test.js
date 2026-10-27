@@ -851,3 +851,35 @@ test('tool names with folders, spaces or = are redacted, never shown', () => {
     assert.strictEqual(s.top[0].label, 'mcp:<redacted>', nm);
   }
 });
+
+// ---- review 2026-10-28: F7/F8/F12 ----
+test('F7: internal error with DEBUG=1 prints no message, stack or path', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxa-'));
+  const cfg = path.join(d, 'cfg');
+  fs.mkdirSync(path.join(cfg, 'projects', 'p'), { recursive: true });
+  fs.writeFileSync(path.join(cfg, 'projects', 'p', 's.jsonl'),
+    [U('b', 'Bash', { command: 'true' }), R('b', 'ok')].map(x => JSON.stringify(x)).join('\n') + '\n');
+  const preload = path.join(d, 'preload.js');
+  fs.writeFileSync(preload, `process.stdout.write = () => { throw new Error('CANARY_F7_STACK_9Q2W'); };\n`);
+  const r = spawnSync(process.execPath, ['-r', preload, path.join(__dirname, 'cli.js'), '--days', '36500', '--json'],
+    { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg, DEBUG: '1' } });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stderr, /internal error/);
+  assert.ok(!r.stderr.includes('CANARY_F7_STACK_9Q2W'));
+  assert.ok(!r.stderr.includes(cfg), 'no paths in error output');
+  assert.ok(!r.stderr.includes(__dirname), 'no stack in error output');
+});
+
+test('F8: --days accepts digits only', () => {
+  for (const v of ['0x10', '1e1', ' 7']) {
+    assert.strictEqual(run(['--days', v]).status, 2, JSON.stringify(v));
+  }
+  assert.strictEqual(run(['--days', '7']).status, 0);
+});
+
+test('F12: suffixed versions contribute their x.y.z prefix to the range', () => {
+  const s = A([{ version: '2.1.311-beta' }, { version: '2.1.309' }]);
+  assert.deepStrictEqual(s.meta.claudeCodeVersions, ['2.1.309', '2.1.311']);
+  assert.ok(!JSON.stringify(s).includes('beta'));
+  assert.strictEqual(A([{ version: '2.1' }, { version: 'abc' }]).meta.claudeCodeVersions, null);
+});
