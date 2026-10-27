@@ -5,7 +5,8 @@
 **What ate your Claude Code context window?**
 
 - **What:** ranks the tool results — Bash outputs, file reads, MCP calls — that pushed
-  the most text into your context, including files that were re-read without changing.
+  the most text into your context, lists subagent re-reads of main-session files,
+  and splits the first request (2.1.310+ sessions) into system prompt, tool definitions and the rest.
 - **Who:** Claude Code users whose context fills up fast and who want to know exactly which calls did it.
 - **How:** reads your local session logs across all your sessions, offline. Zero dependencies.
 
@@ -30,6 +31,8 @@ tool calls were the biggest, so you know what to quiet down, scope down, or stop
 
 - Your sessions compact early or run out of context unexpectedly.
 - You want fewer, cheaper re-reads: find files Claude reads again without changes.
+- Your first request looks big: see what it is made of — system prompt, tool definitions (built-in vs MCP) and the rest — on Claude Code 2.1.310+.
+- You use subagents: find files they read again that the main session already loaded.
 - You are writing a bug report or tuning a workflow and need a `meta` block or JSON summary (`--json`).
 
 ## Usage
@@ -55,6 +58,19 @@ whole context or your bill.
 The re-reads section lists files that returned exactly the same text as an earlier read of
 the same file range, with no compaction in between.
 
+**Why is my first request so big?**
+Every session starts with the first-request input before any tool result lands.
+ctx-autopsy reports its median size and, on Claude Code 2.1.310+, splits it into system prompt, tool definitions (built-in vs MCP) and the rest. For example, synthetic sessions with the new records print:
+`First-request input: median 58k tokens over 2 sessions (includes your message)`
+`first-request split (2.1.310+, 1 session): system ~167 · tools ~16 (builtin ~6 · mcp ~10) · rest ~55k tokens (±50%)`
+Older logs show the total without the split. Token figures are rough (`chars / 3`, ±50%).
+
+**Do subagents re-read what the main session already loaded?**
+Sometimes: a subagent works in a separate context and may read the same files again.
+ctx-autopsy lists subagent reads that return exactly the same text the main session already read from the same file range. For example, synthetic sessions with subagent logs print:
+`Subagent re-reads of main-session files: 2 (86 chars)`
+The list is separate from same-session re-reads and from the flagged percentage.
+
 **Does it send my session data anywhere?**
 No. It runs locally with no network access, no telemetry, and never writes files.
 Output shows file names, tool names, MCP server names, and directly executed script names — no folders, no arguments, no session content. Names over 40 chars or matching secret patterns show as `<redacted>`. Unrecognized block type names may appear under `meta.unknownBlockTypes`.
@@ -76,7 +92,7 @@ Built-in commands:
 | `/usage` | share of usage by skill, subagent, plugin, MCP server (last 24h / 7d, subscription plans) |
 | `/context` | what is in the **current** session's context right now |
 | `/insights` | how you work, written by the model (uses tokens) |
-| **ctx-autopsy** | **which individual tool calls** (`npm test`, `Read pricing.ts`) were biggest, and which files were re-read, across all sessions, offline, any plan |
+| **ctx-autopsy** | **which individual tool calls** (`npm test`, `Read pricing.ts`) were biggest, which files were re-read (same session or by subagents), and the first-request split into system, tools and rest (2.1.310+), across all sessions, offline, any plan |
 
 Other open-source tools:
 
