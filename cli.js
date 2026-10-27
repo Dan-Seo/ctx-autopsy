@@ -134,7 +134,7 @@ function newReport(opts = {}) {
     lines: 0, badLines: 0, oversizeLines: 0, unpaired: 0,
     unknownBlocks: Object.create(null), ccMin: null, ccMax: null,
     counted: new Set(),    // tool_use ids already counted, across files
-    results: 0, textChars: 0, flaggedChars: 0, images: 0,
+    results: 0, textChars: 0, flaggedChars: 0, images: 0, toolReferences: 0,
     byTool: new Map(),     // group -> {calls, chars}
     top: [],               // [{label, chars}]
     rereads: { count: 0, chars: 0, files: new Map() },
@@ -157,8 +157,8 @@ function verCmp(a, b) {
 // Text length, image count, and a hash of the text (to tell a real re-read from a changed file).
 function resultText(content, onUnknown) {
   const h = createHash('sha1');
-  if (typeof content === 'string') return { chars: content.length, images: 0, hash: h.update(content).digest('hex'), complete: true };
-  let chars = 0, images = 0, complete = true;
+  if (typeof content === 'string') return { chars: content.length, images: 0, refs: 0, hash: h.update(content).digest('hex'), complete: true };
+  let chars = 0, images = 0, refs = 0, complete = true;
   const unknown = type => { complete = false; onUnknown(type); };
   const stack = Array.isArray(content) ? [{ blocks: content, index: 0 }] : [];
   if (content != null && !Array.isArray(content)) unknown('invalid_tool_result_content');
@@ -168,11 +168,12 @@ function resultText(content, onUnknown) {
     const c = frame.blocks[frame.index++];
     if (c && c.type === 'text' && typeof c.text === 'string') { chars += c.text.length; h.update(c.text); }
     else if (c && (c.type === 'image' || c.type === 'document')) images++; // base64 is never counted
+    else if (c && c.type === 'tool_reference') refs++; // the loaded definition is not in the log
     else if (c && c.type === 'search_result' && Array.isArray(c.content)) {
       stack.push({ blocks: c.content, index: 0 });
     } else unknown(c && typeof c.type === 'string' ? c.type : 'invalid_tool_result_block');
   }
-  return { chars, images, hash: h.digest('hex'), complete };
+  return { chars, images, refs, hash: h.digest('hex'), complete };
 }
 
 function unknownBlock(r, type, inWindow) {
@@ -236,7 +237,7 @@ function feedRecord(r, st, o) {
     const duplicate = r.counted.has(b.tool_use_id);
     r.counted.add(b.tool_use_id);
 
-    const { chars, images, hash, complete } = resultText(b.content, type => unknownBlock(r, type, inWindow && !duplicate));
+    const { chars, images, refs, hash, complete } = resultText(b.content, type => unknownBlock(r, type, inWindow && !duplicate));
     // Restore each context's read history even for copied results or results before the window.
     const fp = use.name === 'Read' && use.input && typeof use.input.file_path === 'string' ? use.input.file_path : null;
     const readKey = fp && !b.is_error && complete && chars > 0 && !images
@@ -246,6 +247,7 @@ function feedRecord(r, st, o) {
     if (!inWindow || duplicate) continue; // copied history updates state but is only measured once
 
     r.images += images;
+    r.toolReferences += refs;
     r.results++;
     r.textChars += chars;
     const g = toolGroup(use.name);
@@ -302,6 +304,7 @@ function summarize(r) {
     summary: {
       sessions: r.sessions, subagentFiles: r.subagentFiles, toolResults: r.results,
       textChars: r.textChars, flaggedChars: r.flaggedChars, flaggedPct: pct(r.flaggedChars), images: r.images,
+      toolReferences: r.toolReferences,
     },
     byTool: [...r.byTool].map(([tool, v]) => ({ tool, calls: v.calls, chars: v.chars, pct: pct(v.chars) }))
       .sort((a, b) => b.chars - a.chars),
@@ -402,6 +405,8 @@ function render(s, days, tty) {
     }
   }
   if (sm.images) L.push('', dim(`Images/PDFs in tool results: ${sm.images} (not counted above)`));
+  if (sm.toolReferences && !sm.images) L.push('');
+  if (sm.toolReferences) L.push(dim(`Tool definitions loaded by tool search: ${sm.toolReferences} (size not in logs, not counted above)`));
   if (s.startingContext.medianTokens) L.push(dim(`First-request input: median ${k(s.startingContext.medianTokens)} tokens over ${s.startingContext.sessions} sessions (includes your message)`));
   if (s.tips.length) {
     L.push('', b('Try'));

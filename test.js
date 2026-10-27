@@ -416,3 +416,55 @@ test('unreadable root fails; unreadable subdirectories produce an explicit parti
   assert.match(rendered.stdout, /unreadable directories 1/);
   assert.match(rendered.stdout, /incomplete|unreliable/);
 });
+
+test('tool_reference blocks are counted, not measured, and stay out of output', () => {
+  const dir = path.join(FIX, 'tool-search');
+  const r = run(['--days', '36500', '--json'], { CLAUDE_CONFIG_DIR: dir });
+  assert.strictEqual(r.status, 0);
+  const j = JSON.parse(r.stdout);
+  assert.deepStrictEqual(j.meta.unknownBlockTypes, {});
+  assert.strictEqual(j.meta.suspect, false);
+  assert.strictEqual(j.summary.toolReferences, 2, 'the api-request-blob copy is not counted twice');
+  assert.strictEqual(j.summary.toolResults, 2);
+  const ts = j.byTool.find(t => t.tool === 'ToolSearch');
+  assert.strictEqual(ts.calls, 1);
+  assert.strictEqual(ts.chars, 0);
+  assert.ok(!JSON.stringify(j).includes('CANARY_TS'));
+  const t = run(['--days', '36500'], { CLAUDE_CONFIG_DIR: dir });
+  assert.strictEqual(t.status, 0);
+  assert.match(t.stdout, /Tool definitions loaded by tool search: 2 \(size not in logs, not counted above\)/);
+  assert.doesNotMatch(t.stdout, /⚠/);
+  assert.ok(!t.stdout.includes('CANARY_TS'));
+});
+
+test('tool references are counted once across resumed history and only inside --days', () => {
+  const ref = name => ({ type: 'tool_reference', tool_name: name });
+  const a = [U('t1', 'ToolSearch', {}), R('t1', [ref('a'), ref('b')])].map(x => JSON.stringify(x));
+  const b = [...a, ...[U('t2', 'ToolSearch', {}), R('t2', [ref('c')])].map(x => JSON.stringify(x))];
+  const s = analyze([{ lines: a }, { lines: b }]);
+  assert.strictEqual(s.summary.toolReferences, 3);
+  assert.strictEqual(s.summary.toolResults, 2);
+  assert.strictEqual(s.meta.suspect, false);
+  const old = [U('o', 'ToolSearch', {}), R('o', [ref('old')])]
+    .map(row => ({ ...row, timestamp: '2020-01-01T00:00:00Z' }));
+  const w = A(old, { since: Date.parse('2026-01-01T00:00:00Z') });
+  assert.strictEqual(w.summary.toolReferences, 0);
+  assert.strictEqual(w.summary.toolResults, 0);
+});
+
+test('a top-level tool_reference block is still unknown', () => {
+  for (const type of ['assistant', 'user']) {
+    const s = A([{ type, message: { content: [{ type: 'tool_reference', tool_name: 'x' }] } }]);
+    assert.strictEqual(s.meta.unknownBlockTypes.tool_reference, 1, type);
+    assert.strictEqual(s.meta.suspect, true, type);
+    assert.strictEqual(s.summary.toolReferences, 0, type);
+  }
+});
+
+test('text mixed with tool_reference is measured and counted, nothing unknown', () => {
+  const s = A([U('a', 'ToolSearch', {}), R('a', [{ type: 'text', text: 'hello' }, { type: 'tool_reference', tool_name: 't' }])]);
+  assert.strictEqual(s.summary.textChars, 5);
+  assert.strictEqual(s.summary.toolReferences, 1);
+  assert.strictEqual(JSON.stringify(s.meta.unknownBlockTypes), '{}');
+  assert.strictEqual(s.meta.suspect, false);
+});
