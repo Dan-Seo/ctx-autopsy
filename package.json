@@ -1,7 +1,7 @@
 {
   "name": "ctx-autopsy",
   "version": "0.1.0",
-  "description": "See which tool calls filled your Claude Code context: biggest Bash outputs, file reads and re-reads across sessions. Local, zero-dependency.",
+  "description": "What ate your Claude Code context window? Ranks the biggest Bash outputs, file reads and re-reads across local sessions. Offline, zero-dependency CLI.",
   "bin": {
     "ctx-autopsy": "cli.js"
   },
@@ -17,7 +17,9 @@
   "keywords": [
     "claude-code",
     "claude",
+    "context-window",
     "context",
+    "token-usage",
     "tokens",
     "ai-agents",
     "cli",
