@@ -55,7 +55,7 @@ the same file range, with no compaction in between.
 
 **Does it send my session data anywhere?**
 No. It runs locally with no network access, no telemetry, and never writes files.
-Output shows file names, tool names, MCP server names, and directly executed script names — no folders, no arguments, no session content. Unrecognized block type names may appear under `meta.unknownBlockTypes`.
+Output shows file names, tool names, MCP server names, and directly executed script names — no folders, no arguments, no session content. Names over 40 chars or matching secret patterns show as `<redacted>`. Unrecognized block type names may appear under `meta.unknownBlockTypes`.
 
 **How is this different from `/context` or ccusage?**
 `/context` shows the current session's context right now; ccusage reports token usage and
@@ -107,7 +107,7 @@ Other open-source tools:
 - Output shows file **names** only (no folders). Bash commands show only the program name (`curl`, `python`),
   plus a recognized public subcommand (`npm test`, `git status`). Private package-script names and arguments are never shown:
   `npm acme-private-deploy` is labeled `npm`. Complex shell syntax that cannot be safely identified is labeled `bash`.
-- Tool names, MCP server names (`mcp:<server>`), and directly executed script file names (`./deploy.sh` → `deploy.sh`) are shown as-is.
+- Tool names, MCP server names (`mcp:<server>`), and directly executed script file names (`./deploy.sh` → `deploy.sh`) are shown as-is (names over 40 chars or matching secret patterns show as `<redacted>`).
   Unknown block type names may appear under `meta.unknownBlockTypes`.
 - Session content is never printed, including in error messages.
 - Reporting a bug? Paste the `meta` block of `npx ctx-autopsy --json`. Please do not attach `.jsonl` files.
