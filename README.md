@@ -2,15 +2,35 @@
 
 [![npm](https://img.shields.io/npm/v/ctx-autopsy)](https://www.npmjs.com/package/ctx-autopsy) ![node](https://img.shields.io/node/v/ctx-autopsy) ![dependencies](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/npm/l/ctx-autopsy)
 
-**Which tool calls filled your Claude Code context?**
+**What ate your Claude Code context window?**
 
-`npx ctx-autopsy` reads your local Claude Code session logs and ranks the tool results
-(Bash commands, file reads, MCP calls) that pushed the most text into context
-across all your sessions, including files that were re-read without changing.
+- **What:** ranks the tool results — Bash outputs, file reads, MCP calls — that pushed
+  the most text into your context, including files that were re-read without changing.
+- **Who:** Claude Code users whose context fills up fast and who want to know exactly which calls did it.
+- **How:** reads your local session logs across all your sessions, offline. Zero dependencies.
+
+```sh
+npx ctx-autopsy
+```
+
+> In the bundled demo sessions, 82.5% of tool-output text came from oversized results
+> and re-reads. Run it to see your number.
 
 ![ctx-autopsy output: 82.5% of tool-output text came from oversized results and re-reads, followed by a per-tool bar chart, the largest results, re-read files and tips](https://raw.githubusercontent.com/Dan-Seo/ctx-autopsy/main/docs/demo.svg)
 
 <sub>Output from the synthetic sessions in `fixtures/`. Try it on your own: `npx ctx-autopsy`</sub>
+
+## Why
+
+Context fills up silently: one verbose `npm test` run or a file read ten times over can push
+thousands of lines into the window without you noticing. ctx-autopsy shows which individual
+tool calls were the biggest, so you know what to quiet down, scope down, or stop re-reading.
+
+## When to use
+
+- Your sessions compact early or run out of context unexpectedly.
+- You want fewer, cheaper re-reads: find files Claude reads again without changes.
+- You are writing a bug report or tuning a workflow and need a `meta` block or JSON summary (`--json`).
 
 ## Usage
 
@@ -22,7 +42,32 @@ npx ctx-autopsy --json     # for scripts and bug reports
 
 Requires Node 22+. Zero dependencies. Reads `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`).
 
-## How it differs from built-in commands
+## FAQ
+
+**What is eating my Claude Code context window?**
+Run `npx ctx-autopsy`. It ranks the tool results that pushed the most text into context
+across all your sessions. Percentages are of tool-output text (characters), not of your
+whole context or your bill.
+
+**Which files does Claude keep re-reading?**
+The re-reads section lists files that returned exactly the same text as an earlier read of
+the same file range, with no compaction in between.
+
+**Does it send my session data anywhere?**
+No. It runs locally with no network access, no telemetry, and never writes files.
+Output shows file names only — no folders, no arguments, no session content.
+
+**How is this different from `/context` or ccusage?**
+`/context` shows the current session's context right now; ccusage reports token usage and
+cost over time. ctx-autopsy ranks which individual past tool calls were biggest.
+
+**토큰 수치는 얼마나 정확한가요?**
+Token figures are rough (`chars / 3`, ±50%). Korean, Japanese and Chinese text uses more
+tokens per character — treat the number as an order-of-magnitude guide.
+
+## How it compares
+
+Built-in commands:
 
 | | shows |
 |---|---|
@@ -30,6 +75,14 @@ Requires Node 22+. Zero dependencies. Reads `$CLAUDE_CONFIG_DIR/projects` (defau
 | `/context` | what is in the **current** session's context right now |
 | `/insights` | how you work, written by the model (uses tokens) |
 | **ctx-autopsy** | **which individual tool calls** (`npm test`, `Read pricing.ts`) were biggest, and which files were re-read, across all sessions, offline, any plan |
+
+Other open-source tools:
+
+- [ccusage](https://github.com/ryoppippi/ccusage) reports token usage and cost per day, week, month and session across agent CLIs; ctx-autopsy instead ranks individual tool calls and re-reads by their share of context.
+- [cost-xray](https://github.com/tigerless-labs/cost-xray) shows what an agent sends to the API and what each part costs; ctx-autopsy measures local session logs offline and does not track cost.
+- [token-report](https://github.com/24kchengYe/token-report) scans local sessions into terminal reports and interactive HTML dashboards; ctx-autopsy is a zero-dependency terminal-only report focused on per-tool-call ranking.
+- [claude-mods](https://github.com/mishgoldenberg/claude-mods) adds live panels, guardrails and notifications inside Claude Code; ctx-autopsy is a post-hoc analysis across past sessions.
+- [tokenmaxxing](https://github.com/851-labs/tokenmaxxing) syncs token usage with others; ctx-autopsy runs fully locally with no network access.
 
 ## What the numbers mean
 
