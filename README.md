@@ -40,6 +40,8 @@ npx ctx-autopsy --days 7
 npx ctx-autopsy --json     # for scripts and bug reports
 ```
 
+JSON fields are documented in [docs/json.md](docs/json.md).
+
 Requires Node 22+. Zero dependencies. Reads `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`).
 
 ## FAQ
@@ -95,11 +97,13 @@ Other open-source tools:
 - Images and PDFs are counted, not measured. Text inside structured `search_result` blocks is measured too.
 - Tools loaded through tool search (`tool_reference` blocks) are counted, not measured: the log names the tool but not the definition it loads.
 - The first-request input line includes your first message, attachments and preloaded context;
-  it does not isolate the system prompt or CLAUDE.md. Use `/context` for the details.
+  it does not isolate CLAUDE.md or skills (see the split line below for the system prompt and tool definitions). Use `/context` for the details.
   The JSON field `startingContext` retains its name for compatibility and reports this same total.
 - Subagent logs are separate contexts: their tool results are included in the totals, while re-reads are tracked
   per context and the first-request input line uses main sessions only.
 - If a resumed session copied earlier history into a new log, each tool result is still counted once.
+- The first-request split line (2.1.310+ sessions only) breaks the median first request into system prompt, tool definitions (built-in vs MCP) and the rest. Sizes are characters; token figures are rough (`chars / 3`, ±50%). Tool definitions loaded on demand by tool search are not part of the request's tool list, so they show up in "rest".
+- Subagent re-reads counts subagent reads that repeat an earlier identical main-session read of the same file range. It is listed separately and is not part of the flagged percentage. A result can appear in both lists.
 
 ## Privacy
 
@@ -111,6 +115,7 @@ Other open-source tools:
   Unknown block type names may appear under `meta.unknownBlockTypes`.
 - Session content is never printed, including in error messages.
 - Reporting a bug? Paste the `meta` block of `npx ctx-autopsy --json`. Please do not attach `.jsonl` files.
+- The first-request split reads request-shape records but shows only sizes (characters and counts).
 
 ## Limits
 

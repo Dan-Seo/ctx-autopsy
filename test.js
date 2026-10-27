@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { analyze, bashLabel, readLines } = require('./cli.js');
+const { analyze, bashLabel, readLines, render } = require('./cli.js');
 
 const FIX = path.join(__dirname, 'fixtures');
 const run = (args, env = {}) => spawnSync(process.execPath, [path.join(__dirname, 'cli.js'), ...args],
@@ -467,4 +467,350 @@ test('text mixed with tool_reference is measured and counted, nothing unknown', 
   assert.strictEqual(s.summary.toolReferences, 1);
   assert.strictEqual(JSON.stringify(s.meta.unknownBlockTypes), '{}');
   assert.strictEqual(s.meta.suspect, false);
+});
+
+// ---- 0.2.0: first-request split (a) + subagent re-reads (b) ----
+const AR = (hash, extra = {}) => ({ type: 'api-request', shapeHash: hash, ...extra });
+const SH = (hash, shape, extra = {}) => ({ type: 'api-request-shape', shapeHash: hash, shape, ...extra });
+const AU = (id, usage, extra = {}) => { const r = U(id, 'Bash', { command: 'true' }, extra); r.message.usage = usage; return r; };
+const J = rows => rows.map(r => JSON.stringify(r));
+const SUB_TIP = 'Subagents re-read files the main session already had. Pass the key facts in the subagent prompt instead of letting them re-read shared files.';
+
+test('0.2.0 (a1): split over two sessions uses medians', () => {
+  const tools1 = [{ name: 'Read' }];
+  const tools2 = [{ name: 'Read' }, { name: 'mcp__srv__t' }];
+  const f1 = [SH('h1', { system: [{ type: 'text', text: 'a'.repeat(300) }], tools: tools1 }),
+    AR('h1', { timestamp: '2026-10-27T09:00:00Z' }),
+    AU('u1', { input_tokens: 9000 }, { timestamp: '2026-10-27T09:00:01Z' }), R('u1', 'ok')];
+  const f2 = [SH('h2', { system: [{ type: 'text', text: 'b'.repeat(600) }], tools: tools2 }),
+    AR('h2', { timestamp: '2026-10-27T09:00:00Z' }),
+    AU('u2', { input_tokens: 12000 }, { timestamp: '2026-10-27T09:00:01Z' }), R('u2', 'ok')];
+  const sp = analyze([{ lines: J(f1) }, { lines: J(f2) }]).startingContext.split;
+  assert.strictEqual(sp.sessions, 2);
+  assert.strictEqual(sp.systemChars, 450);
+  assert.strictEqual(sp.toolCount, 2);
+  assert.strictEqual(sp.systemTokens, 150);
+  const t1 = JSON.stringify(tools1).length, t2 = JSON.stringify(tools2).length;
+  const m2 = JSON.stringify(tools2[1]).length;
+  assert.strictEqual(sp.toolsChars, Math.round((t1 + t2) / 2));
+  assert.strictEqual(sp.toolsTokens, Math.round((Math.round(t1 / 3) + Math.round(t2 / 3)) / 2));
+  assert.strictEqual(sp.toolsBuiltinTokens, Math.round((Math.round(t1 / 3) + Math.round((t2 - m2) / 3)) / 2));
+  assert.strictEqual(sp.toolsMcpTokens, Math.round(Math.round(m2 / 3) / 2));
+  const r1 = Math.max(0, Math.round(9000 - (300 + t1) / 3)), r2 = Math.max(0, Math.round(12000 - (600 + t2) / 3));
+  assert.strictEqual(sp.restTokens, Math.round((r1 + r2) / 2));
+});
+
+test('0.2.0 (a2): sessions without request records have no split line', () => {
+  const s = A([AU('u', { input_tokens: 5000 }), R('u', 'ok')]);
+  assert.strictEqual(s.startingContext.split, null);
+  assert.ok(!render(s, 30, false).includes('first-request split'));
+});
+
+test('0.2.0 (a3): a shape in another file does not resolve', () => {
+  const shape = { system: [{ type: 'text', text: 'x'.repeat(100) }], tools: [{ name: 'Read' }] };
+  const f1 = [AR('hx', { timestamp: '2026-10-27T09:00:00Z' }), AU('u1', { input_tokens: 5000 }), R('u1', 'ok')];
+  const f2 = [SH('hx', shape), AU('u2', { input_tokens: 6000 }), R('u2', 'ok')];
+  const s = analyze([{ lines: J(f1) }, { lines: J(f2) }]);
+  assert.strictEqual(s.startingContext.split, null);
+  assert.strictEqual(s.startingContext.sessions, 2);
+});
+
+test('0.2.0 (a4): a missing first-request hash excludes the session but keeps the totals', () => {
+  const s = A([{ type: 'api-request', timestamp: '2026-10-27T09:00:00Z' },
+    AR('h', { timestamp: '2026-10-27T09:01:00Z' }),
+    SH('h', { system: [{ type: 'text', text: 'x' }], tools: [] }),
+    AU('u', { input_tokens: 5000 }), R('u', 'ok')]);
+  assert.strictEqual(s.startingContext.split, null, 'a later request never substitutes the first');
+  assert.strictEqual(s.startingContext.medianTokens, 5000);
+});
+
+test('0.2.0 (a5): request and shape without usage are excluded', () => {
+  const s = A([SH('h', { system: [{ text: 'x' }], tools: [] }), AR('h', { timestamp: 1000 })]);
+  assert.strictEqual(s.startingContext.split, null);
+  assert.strictEqual(s.startingContext.medianTokens, null);
+});
+
+test('0.2.0 (a6): usage outside the window excludes the session', () => {
+  const rows = [SH('h', { system: [{ text: 'x'.repeat(10) }], tools: [] }),
+    AR('h', { timestamp: '2026-10-27T09:00:00Z' }),
+    AU('u', { input_tokens: 5000 }, { timestamp: '2020-01-01T00:00:00Z' }),
+    R('u', 'ok', {}, { timestamp: '2020-01-01T00:00:01Z' })];
+  const s = analyze([{ lines: J(rows) }], { since: Date.parse('2026-01-01T00:00:00Z') });
+  assert.strictEqual(s.startingContext.split, null);
+  assert.strictEqual(s.startingContext.medianTokens, null);
+});
+
+test('0.2.0 (a7): requests with an agentId are not the first request', () => {
+  const s = A([
+    SH('bad', { system: [{ text: 'x'.repeat(111) }], tools: [] }),
+    SH('good', { system: [{ text: 'y'.repeat(222) }], tools: [] }),
+    AR('bad', { timestamp: '2026-10-27T09:00:00Z', agentId: 'sub-1' }),
+    AR('good', { timestamp: '2026-10-27T09:01:00Z' }),
+    AU('u', { input_tokens: 5000 }), R('u', 'ok')]);
+  assert.strictEqual(s.startingContext.split.systemChars, 222);
+});
+
+test('0.2.0 (a8): timestamp ties keep file order and unparsable times lose', () => {
+  const mk = n => ({ system: [{ text: 'v'.repeat(n) }], tools: [] });
+  const s = A([SH('c', mk(300)), SH('a', mk(100)), SH('b', mk(200)),
+    AR('c', { timestamp: 'not-a-time' }),
+    AR('a', { timestamp: '2026-10-27T09:00:00Z' }),
+    AR('b', { timestamp: '2026-10-27T09:00:00Z' }),
+    AU('u', { input_tokens: 5000 }), R('u', 'ok')]);
+  assert.strictEqual(s.startingContext.split.systemChars, 100);
+});
+
+test('0.2.0 (a9): a non-array tool list contributes zero but still resolves', () => {
+  const s = A([SH('h', { system: [{ text: 'abc' }], tools: 'nope' }),
+    AR('h', { timestamp: 1000 }), AU('u', { input_tokens: 5000 }), R('u', 'ok')]);
+  const sp = s.startingContext.split;
+  assert.strictEqual(sp.sessions, 1);
+  assert.strictEqual(sp.systemChars, 3);
+  assert.strictEqual(sp.toolsChars, 0);
+  assert.strictEqual(sp.toolCount, 0);
+  assert.strictEqual(sp.toolsMcpTokens, 0);
+});
+
+test('0.2.0 (a10): split inputs never leak names, text, or hashes', () => {
+  const s = A([
+    SH('CANARY_02-hash', { system: [{ type: 'text', text: 'CANARY_02 system body' }],
+      tools: [{ name: 'Read' }, { name: 'mcp__CANARY_02srv__t' }] }),
+    AR('CANARY_02-hash', { timestamp: '2026-10-27T09:00:00Z' }),
+    AU('u', { input_tokens: 5000 }), R('u', 'CANARY_02 result body')]);
+  assert.strictEqual(s.startingContext.split.sessions, 1);
+  assert.ok(!JSON.stringify(s).includes('CANARY_02'));
+  assert.ok(!render(s, 30, false).includes('CANARY_02'));
+});
+
+const T0 = '2026-10-20T10:00:00Z', T1 = '2026-10-20T11:00:00Z';
+const pair = (id, fp, body, ts, input = {}, extra = {}) =>
+  [U(id, 'Read', { file_path: fp, ...input }), R(id, body, extra, { timestamp: ts })];
+const sub2 = (mainRows, subRows, opts) => analyze([{ lines: J(mainRows), sessionKey: 'P/S' },
+  { lines: J(subRows), subagent: true, sessionKey: 'P/S' }], opts).rereads.subagent;
+
+test('0.2.0 (b11): two subagent re-reads match by key, hash, and order', () => {
+  const main = [...pair('m1', '/w/a.ts', 'alpha-body', T0), ...pair('m2', '/w/b.ts', 'beta-body!', T0)];
+  const sub = [...pair('s1', '/w/a.ts', 'alpha-body', T1), ...pair('s2', '/w/b.ts', 'beta-body!', T1)];
+  const g = sub2(main, sub);
+  assert.strictEqual(g.count, 2);
+  assert.strictEqual(g.chars, 'alpha-body'.length + 'beta-body!'.length);
+  assert.deepStrictEqual(g.files[0], { file: 'a.ts', count: 1 });
+});
+
+test('0.2.0 (b12): range, hash, or order mismatch is not a re-read', () => {
+  assert.strictEqual(sub2(pair('m', '/w/a.ts', 'same', T0), pair('s', '/w/a.ts', 'same', T1, { offset: 5 })).count, 0, 'range');
+  assert.strictEqual(sub2(pair('m', '/w/a.ts', 'v1', T0), pair('s', '/w/a.ts', 'v2', T1)).count, 0, 'hash');
+  assert.strictEqual(sub2(pair('m', '/w/a.ts', 'same', T1), pair('s', '/w/a.ts', 'same', T0)).count, 0, 'order');
+});
+
+test('0.2.0 (b13): equal or unparsable timestamps never match', () => {
+  assert.strictEqual(sub2(pair('m', '/w/a.ts', 'same', T0), pair('s', '/w/a.ts', 'same', T0)).count, 0, 'equal');
+  assert.strictEqual(sub2(pair('m', '/w/a.ts', 'same', 'soon'), pair('s', '/w/a.ts', 'same', T1)).count, 0, 'main unparsable');
+  const badSub = sub2(pair('m', '/w/a.ts', 'same', T0), pair('s', '/w/a.ts', 'same', 'later-ish'));
+  assert.strictEqual(badSub.count, 0, 'sub unparsable');
+  assert.strictEqual(badSub.readChars, 4, 'unparsable sub reads still count as reads');
+});
+
+test('0.2.0 (b14): sub reads outside the window are out, main reads outside count', () => {
+  const since = Date.parse('2026-01-01T00:00:00Z');
+  const outSub = sub2(pair('m', '/w/a.ts', 'same', '2020-01-01T00:00:00Z'),
+    pair('s', '/w/a.ts', 'same', '2020-06-01T00:00:00Z'), { since });
+  assert.strictEqual(outSub.count, 0);
+  assert.strictEqual(outSub.readChars, 0);
+  assert.strictEqual(sub2(pair('m', '/w/a.ts', 'same', '2020-01-01T00:00:00Z'),
+    pair('s', '/w/a.ts', 'same', T1), { since }).count, 1);
+});
+
+test('0.2.0 (b15): duplicate ids pick one representative regardless of file order', () => {
+  const main = (sk, ts) => ({ lines: J(pair('m', '/w/a.ts', 'same', ts)), sessionKey: sk });
+  const sub = (sk, id, ts) => ({ lines: J(pair(id, '/w/a.ts', 'same', ts)), subagent: true, sessionKey: sk });
+  const both = files => [analyze(files).rereads.subagent.count, analyze([...files].reverse()).rereads.subagent.count];
+  assert.deepStrictEqual(both([main('P/S', T0), sub('P/S', 'dup', T1), sub('P/S', 'dup', '2026-10-20T12:00:00Z')]), [1, 1]);
+  assert.deepStrictEqual(both([main('p/aaa', T0), sub('p/aaa', 'dup', T1), sub('p/zzz', 'dup', T1)]), [1, 1]);
+  assert.deepStrictEqual(both([main('p/zzz', T0), sub('p/zzz', 'dup', T1), sub('p/aaa', 'dup', T1)]), [0, 0]);
+});
+
+test('0.2.0 (b16): compact boundaries do not affect subagent matching', () => {
+  const bound = { type: 'system', subtype: 'compact_boundary' };
+  const s = analyze([{ lines: J([...pair('m', '/w/a.ts', 'same', T0), bound]), sessionKey: 'P/S' },
+    { lines: J([bound, ...pair('s', '/w/a.ts', 'same', T1)]), subagent: true, sessionKey: 'P/S' }]);
+  assert.strictEqual(s.rereads.subagent.count, 1);
+});
+
+test('0.2.0 (b17): files without keys and orphan subagents contribute nothing', () => {
+  const noKey = analyze([{ lines: J(pair('m', '/w/a.ts', 'same', T0)) },
+    { lines: J(pair('s', '/w/a.ts', 'same', T1)), subagent: true }]);
+  assert.deepStrictEqual(noKey.rereads.subagent, { count: 0, chars: 0, files: [], readChars: 0 });
+  const orphan = analyze([{ lines: J(pair('s', '/w/a.ts', 'same', T1)), subagent: true, sessionKey: 'P/orphan' }]);
+  assert.strictEqual(orphan.rereads.subagent.count, 0);
+  assert.strictEqual(orphan.rereads.subagent.readChars, 4);
+});
+
+test('0.2.0 (b18): one result can count in both re-read lists but flags once', () => {
+  const body = 'shared-body';
+  const main = [...pair('m1', '/w/a.ts', body, T0), ...pair('m2', '/w/a.ts', body, '2026-10-20T10:30:00Z')];
+  const s = analyze([{ lines: J(main), sessionKey: 'P/S' },
+    { lines: J(pair('s', '/w/a.ts', body, T1)), subagent: true, sessionKey: 'P/S' }]);
+  assert.strictEqual(s.rereads.count, 1);
+  assert.strictEqual(s.rereads.subagent.count, 1);
+  assert.strictEqual(s.summary.flaggedChars, body.length);
+});
+
+test('0.2.0 (b19): the subagent tip needs two re-reads, size, and share', () => {
+  const run19 = (re, fresh) => {
+    const main = [], sub = [];
+    re.forEach(([f, n], i) => {
+      const body = ('' + i).repeat(n).slice(0, n);
+      main.push(...pair('m' + i, f, body, T0));
+      sub.push(...pair('s' + i, f, body, T1));
+    });
+    fresh.forEach(([f, n], i) => sub.push(...pair('n' + i, f, 'n'.repeat(n), T1)));
+    return analyze([{ lines: J(main), sessionKey: 'P/S' }, { lines: J(sub), subagent: true, sessionKey: 'P/S' }]);
+  };
+  const yes = run19([['/w/f1', 20000], ['/w/f2', 10000]], [['/w/g1', 30000]]);
+  assert.strictEqual(yes.rereads.subagent.count, 2);
+  assert.strictEqual(yes.rereads.subagent.chars, 30000);
+  assert.strictEqual(yes.rereads.subagent.readChars, 60000);
+  assert.ok(yes.tips.includes(SUB_TIP));
+  assert.ok(!run19([['/w/f1', 20000]], []).tips.includes(SUB_TIP), 'single re-read');
+  assert.ok(!run19([['/w/f1', 20000], ['/w/f2', 9000]], [['/w/g1', 71000]]).tips.includes(SUB_TIP), 'low share');
+  assert.ok(!run19([['/w/f1', 6000], ['/w/f2', 4000]], [['/w/g1', 10000]]).tips.includes(SUB_TIP), 'small total');
+});
+
+test('0.2.0 (b20): subagent output shows file names only, never folders or bodies', () => {
+  const fp = '/tmp/CANARY_02dir/plan.ts';
+  const s = analyze([{ lines: J(pair('m', fp, 'CANARY_02 body text', T0)), sessionKey: 'P/S' },
+    { lines: J(pair('s', fp, 'CANARY_02 body text', T1)), subagent: true, sessionKey: 'P/S' }]);
+  assert.strictEqual(s.rereads.subagent.count, 1);
+  assert.deepStrictEqual(s.rereads.subagent.files, [{ file: 'plan.ts', count: 1 }]);
+  assert.ok(!JSON.stringify(s).includes('CANARY_02'));
+  assert.ok(!render(s, 30, false).includes('CANARY_02'));
+  assert.ok(s.rereads.subagent.files.every(f => !f.file.includes('/')));
+});
+
+test('0.2.0 (cli21): committed fixtures resolve one split session and two re-reads', () => {
+  const dir = path.join(__dirname, 'fixtures-0.2.0');
+  const r = run(['--days', '36500', '--json'], { CLAUDE_CONFIG_DIR: dir });
+  assert.strictEqual(r.status, 0);
+  const j = JSON.parse(r.stdout);
+  assert.strictEqual(j.startingContext.sessions, 2);
+  assert.strictEqual(j.startingContext.split.sessions, 1);
+  assert.strictEqual(j.rereads.subagent.count, 2);
+  const t = run(['--days', '36500'], { CLAUDE_CONFIG_DIR: dir });
+  assert.strictEqual(t.status, 0);
+  for (const bad of ['CANARY_02', 'ACME']) {
+    assert.ok(!t.stdout.includes(bad) && !r.stdout.includes(bad), `leaked ${bad}`);
+  }
+});
+
+test('0.2.0 (cli22): old fixtures gain no split or subagent lines', () => {
+  const t = run(['--days', '36500']);
+  assert.strictEqual(t.status, 0);
+  assert.ok(!t.stdout.includes('first-request split'));
+  assert.ok(!t.stdout.includes('Subagent re-reads'));
+  const j = JSON.parse(run(['--days', '36500', '--json']).stdout);
+  assert.strictEqual(j.startingContext.split, null);
+  assert.deepStrictEqual(j.rereads.subagent, { count: 0, chars: 0, files: [], readChars: 0 });
+});
+
+test('0.2.0 (tip23): the subagent tip never pipes', () => {
+  const { tips } = require('./cli.js');
+  const out = tips({ byTool: [], rereads: { count: 0, subagent: { count: 2, chars: 30000, readChars: 60000 } },
+    startingContext: { medianTokens: null } });
+  assert.ok(out.includes(SUB_TIP));
+  assert.ok(!SUB_TIP.includes('|'));
+  for (const tp of out) if (/\|\s*(tail|head)/.test(tp)) assert.match(tp, /pipefail/);
+});
+
+test('0.2.0 (a24): only the first shape per hash is kept', () => {
+  const s = A([SH('h', { system: [{ text: 'a'.repeat(100) }], tools: [] }),
+    SH('h', { system: [{ text: 'b'.repeat(999) }], tools: [] }),
+    AR('h', { timestamp: 1000 }), AU('u', { input_tokens: 5000 }), R('u', 'ok')]);
+  assert.strictEqual(s.startingContext.split.systemChars, 100);
+});
+
+test('0.2.0 (a25): request records in subagent files are ignored', () => {
+  const s = analyze([{ lines: J([SH('h', { system: [{ text: 'x'.repeat(100) }], tools: [] }),
+    AR('h', { timestamp: 1000 }), AU('u', { input_tokens: 5000 }), R('u', 'ok')]), subagent: true }]);
+  assert.strictEqual(s.startingContext.split, null);
+  assert.strictEqual(s.startingContext.medianTokens, null);
+});
+
+test('0.2.0 (a26): rest tokens never go negative', () => {
+  const s = A([SH('h', { system: [{ text: 'x'.repeat(300) }], tools: [{ name: 'Read' }] }),
+    AR('h', { timestamp: 1000 }), AU('u', { input_tokens: 100 }), R('u', 'ok')]);
+  assert.strictEqual(s.startingContext.split.restTokens, 0);
+});
+
+test('0.2.0 (a27): null or empty agentId counts as a main request', () => {
+  const mk = n => ({ system: [{ text: 'v'.repeat(n) }], tools: [] });
+  const s = A([SH('zero', mk(999)), SH('null', mk(100)), SH('empty', mk(200)),
+    AR('zero', { timestamp: 50, agentId: 0 }),
+    AR('null', { timestamp: 200, agentId: null }),
+    AR('empty', { timestamp: 100, agentId: '' }),
+    AU('u', { input_tokens: 5000 }), R('u', 'ok')]);
+  assert.strictEqual(s.startingContext.split.systemChars, 200);
+});
+
+test('0.2.0 (b28): failed, partial, image, and empty reads are never candidates', () => {
+  const mk = (mainExtra, mainBody, subExtra, subBody) => analyze([
+    { lines: J([U('m', 'Read', { file_path: '/w/a.ts' }), R('m', mainBody, mainExtra, { timestamp: T0 })]), sessionKey: 'P/S' },
+    { lines: J([U('s', 'Read', { file_path: '/w/a.ts' }), R('s', subBody, subExtra, { timestamp: T1 })]), subagent: true, sessionKey: 'P/S' }]).rereads.subagent.count;
+  assert.strictEqual(mk({ is_error: true }, 'denied', {}, 'denied'), 0, 'main failed');
+  assert.strictEqual(mk({}, 'ok', { is_error: true }, 'ok'), 0, 'sub failed');
+  const partial = [{ type: 'text', text: 'same' }, { type: 'future_x' }];
+  assert.strictEqual(mk({}, partial, {}, partial), 0, 'partial');
+  const img = [{ type: 'text', text: 'same' }, { type: 'image', source: {} }];
+  assert.strictEqual(mk({}, img, {}, img), 0, 'image');
+  assert.strictEqual(mk({}, '', {}, ''), 0, 'empty');
+});
+
+test('0.2.0 (b29): subagent files sort by count then name and cut at five', () => {
+  const main = [], sub = [];
+  let i = 0;
+  for (const [fp, n] of [['/w/zebra.ts', 3], ['/w/mango.ts', 2], ['/w/b.ts', 1], ['/w/a.ts', 1], ['/w/A.ts', 1], ['/w/0.ts', 1]]) {
+    const body = 'body-of-' + fp;
+    main.push(...pair('m' + i, fp, body, T0));
+    for (let k = 0; k < n; k++) sub.push(...pair('s' + i + '_' + k, fp, body, T1));
+    i++;
+  }
+  const g = analyze([{ lines: J(main), sessionKey: 'P/S' },
+    { lines: J(sub), subagent: true, sessionKey: 'P/S' }]).rereads.subagent;
+  assert.strictEqual(g.count, 9);
+  assert.deepStrictEqual(g.files, [{ file: 'zebra.ts', count: 3 }, { file: 'mango.ts', count: 2 },
+    { file: '0.ts', count: 1 }, { file: 'A.ts', count: 1 }, { file: 'a.ts', count: 1 }]);
+});
+
+test('0.2.0 (cli30): subagent keys need two leading segments', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxa-'));
+  const put = (rel, rows) => {
+    const p = path.join(d, 'projects', rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, J(rows).join('\n') + '\n');
+  };
+  put('p.jsonl', pair('m1', '/w/a.ts', 'same', T0));
+  put('p/subagents/s1.jsonl', pair('s1', '/w/a.ts', 'same', T1));
+  put('subagents/s2.jsonl', pair('s2', '/w/a.ts', 'same', T1));
+  put('v/sess.jsonl', pair('m2', '/w/b.ts', 'same', T0));
+  put('v/sess/subagents/a.jsonl', pair('s3', '/w/b.ts', 'same', T1));
+  const r = run(['--days', '36500', '--json'], { CLAUDE_CONFIG_DIR: d });
+  assert.strictEqual(r.status, 0);
+  const g = JSON.parse(r.stdout).rereads.subagent;
+  assert.strictEqual(g.count, 1);
+  assert.strictEqual(g.readChars, 4);
+  assert.deepStrictEqual(g.files, [{ file: 'b.ts', count: 1 }]);
+});
+
+test('0.2.0 (json31): split values are numbers and subagent files are strings', () => {
+  const main = [SH('h', { system: [{ text: 'x'.repeat(30) }], tools: [{ name: 'Read' }] }),
+    AR('h', { timestamp: 1000 }), AU('u', { input_tokens: 5000 }), R('u', 'ok'),
+    ...pair('m', '/w/a.ts', 'same', T0)];
+  const s = analyze([{ lines: J(main), sessionKey: 'P/S' },
+    { lines: J(pair('s', '/w/a.ts', 'same', T1)), subagent: true, sessionKey: 'P/S' }]);
+  for (const [kk, v] of Object.entries(s.startingContext.split)) assert.strictEqual(typeof v, 'number', kk);
+  assert.strictEqual(s.rereads.subagent.count, 1);
+  for (const f of s.rereads.subagent.files) {
+    assert.strictEqual(typeof f.file, 'string');
+    assert.strictEqual(typeof f.count, 'number');
+  }
 });

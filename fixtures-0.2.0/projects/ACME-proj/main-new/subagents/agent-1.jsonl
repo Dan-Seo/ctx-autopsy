@@ -1,0 +1,6 @@
+{"type":"assistant","timestamp":"2026-10-27T10:00:00Z","message":{"content":[{"type":"tool_use","id":"s-r1","name":"Read","input":{"file_path":"/tmp/CANARY_02ws/pricing.ts"}}]}}
+{"type":"user","timestamp":"2026-10-27T10:00:30Z","message":{"content":[{"type":"tool_result","tool_use_id":"s-r1","content":"CANARY_02 pricing rows v1: alpha,beta,gamma."}]}}
+{"type":"assistant","timestamp":"2026-10-27T10:01:00Z","message":{"content":[{"type":"tool_use","id":"s-r2","name":"Read","input":{"file_path":"/tmp/CANARY_02ws/checkout.ts","offset":10,"limit":50}}]}}
+{"type":"user","timestamp":"2026-10-27T10:01:30Z","message":{"content":[{"type":"tool_result","tool_use_id":"s-r2","content":"CANARY_02 checkout flow v3: cart,pay,done."}]}}
+{"type":"assistant","timestamp":"2026-10-27T10:02:00Z","message":{"content":[{"type":"tool_use","id":"s-r3","name":"Read","input":{"file_path":"/tmp/CANARY_02ws/newfile.ts"}}]}}
+{"type":"user","timestamp":"2026-10-27T10:02:30Z","message":{"content":[{"type":"tool_result","tool_use_id":"s-r3","content":"CANARY_02 fresh subagent-only notes."}]}}
