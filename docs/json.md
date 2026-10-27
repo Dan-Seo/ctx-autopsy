@@ -108,11 +108,11 @@ values):
 },
 "rereads": {
   "count": 2, "chars": 15000,
-  "files": [{ "file": "checkout.ts", "count": 1 }],
+  "files": [{ "file": "checkout.ts", "count": 1 }, { "file": "pricing.ts", "count": 1 }],
   "subagent": {
     "count": 4, "chars": 12000,
-    "files": [{ "file": "pricing.ts", "count": 3 }],
-    "readChars": 20000
+    "readChars": 20000,
+    "files": [{ "file": "pricing.ts", "count": 3 }, { "file": "checkout.ts", "count": 1 }]
   }
 }
 ```

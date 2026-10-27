@@ -96,7 +96,7 @@ Built-in commands:
 
 Other open-source tools:
 
-- [ccusage](https://github.com/ryoppippi/ccusage) reports token usage and cost per day, week, month and session across agent CLIs; ctx-autopsy instead ranks individual tool calls and re-reads by their share of context.
+- [ccusage](https://github.com/ccusage/ccusage) reports token usage and cost per day, week, month and session across agent CLIs; ctx-autopsy instead ranks individual tool calls and re-reads by their share of context.
 - [cost-xray](https://github.com/tigerless-labs/cost-xray) shows what an agent sends to the API and what each part costs; ctx-autopsy measures local session logs offline and does not track cost.
 - [token-report](https://github.com/24kchengYe/token-report) scans local sessions into terminal reports and interactive HTML dashboards; ctx-autopsy is a zero-dependency terminal-only report focused on per-tool-call ranking.
 - [claude-mods](https://github.com/mishgoldenberg/claude-mods) adds live panels, guardrails and notifications inside Claude Code; ctx-autopsy is a post-hoc analysis across past sessions.
@@ -118,7 +118,7 @@ Other open-source tools:
 - Subagent logs are separate contexts: their tool results are included in the totals, while re-reads are tracked
   per context and the first-request input line uses main sessions only.
 - If a resumed session copied earlier history into a new log, each tool result is still counted once.
-- The first-request split line (2.1.310+ sessions only) breaks the median first request into system prompt, tool definitions (built-in vs MCP) and the rest. Sizes are characters; token figures are rough (`chars / 3`, ±50%). Tool definitions loaded on demand by tool search are not part of the request's tool list, so they show up in "rest".
+- The first-request split line (2.1.310+ sessions only) breaks the median first request into system prompt, tool definitions (built-in vs MCP) and the rest. Underlying sizes are characters (see JSON `systemChars`/`toolsChars`); the line shows rough tokens (`chars / 3`, ±50%). Tool definitions loaded on demand by tool search are not part of the request's tool list, so they show up in "rest".
 - Subagent re-reads counts subagent reads that repeat an earlier identical main-session read of the same file range. It is listed separately and is not part of the flagged percentage. A result can appear in both lists.
 
 ## Privacy
