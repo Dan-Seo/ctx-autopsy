@@ -40,6 +40,7 @@ Requires Node 22+. Zero dependencies. Reads `$CLAUDE_CONFIG_DIR/projects` (defau
   Failed reads are not counted as re-reads.
 - Token figures are rough (`chars / 3`, ±50%). Korean, Japanese and Chinese text uses more tokens per character.
 - Images and PDFs are counted, not measured. Text inside structured `search_result` blocks is measured too.
+- Tools loaded through tool search (`tool_reference` blocks) are counted, not measured: the log names the tool but not the definition it loads.
 - The first-request input line includes your first message, attachments and preloaded context;
   it does not isolate the system prompt or CLAUDE.md. Use `/context` for the details.
   The JSON field `startingContext` retains its name for compatibility and reports this same total.
