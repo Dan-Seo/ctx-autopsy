@@ -837,3 +837,17 @@ test('a search_result with non-array content keeps its own invalid-content key',
   assert.strictEqual(s.meta.unknownBlockTypes.search_result, undefined);
   assert.strictEqual(s.meta.suspect, true);
 });
+
+// ---- privacy fuzz regressions (ctx-pm 2026-10-28): tool names are labels too ----
+test('tool names with folders, spaces or = are redacted, never shown', () => {
+  for (const nm of ['/home/alice/tool', 'tool name', 'k=v', 'a"b', 'x|y']) {
+    const s = A([U('a', nm, {}), R('a', '0123456789')]);
+    assert.strictEqual(s.byTool[0].tool, '<redacted>', nm);
+    assert.strictEqual(s.top[0].label, '<redacted>', nm);
+  }
+  for (const nm of ['mcp__/home/x__t', 'mcp__srv name__t']) {
+    const s = A([U('a', nm, {}), R('a', '0123456789')]);
+    assert.strictEqual(s.byTool[0].tool, 'mcp:<redacted>', nm);
+    assert.strictEqual(s.top[0].label, 'mcp:<redacted>', nm);
+  }
+});

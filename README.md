@@ -73,7 +73,7 @@ The list is separate from same-session re-reads and from the flagged percentage.
 
 **Does it send my session data anywhere?**
 No. It runs locally with no network access, no telemetry, and never writes files.
-Output shows file names, tool names, MCP server names, and directly executed script names — no folders, no arguments, no session content. Names over 40 chars or matching secret patterns show as `<redacted>`. Unrecognized block type names may appear under `meta.unknownBlockTypes`.
+Output shows file names, tool names, MCP server names, and directly executed script names — no folders, no arguments, no session content. Tool/MCP names appear only when identifier-like (letters, digits, `_ . : -`, 1–40 chars) and not secret-like, else `<redacted>` (`mcp:<redacted>`). Files/scripts omit folders; over-long or secret-like file names are `<redacted>`, unidentifiable or over-long commands `bash`. Unknown block type names may appear under `meta.unknownBlockTypes` (non-identifier-like, secret-like or over-long names show as `<redacted>`).
 
 **How is this different from `/context` or ccusage?**
 `/context` shows the current session's context right now; ccusage reports token usage and
@@ -124,11 +124,11 @@ Other open-source tools:
 ## Privacy
 
 - Runs locally. No network access, no telemetry, never writes files.
-- Output shows file **names** only (no folders). Bash commands show only the program name (`curl`, `python`),
+- Output shows file **names** only (no folders; names over 40 chars or matching secret patterns show as `<redacted>`). Bash commands show only the program name (`curl`, `python`),
   plus a recognized public subcommand (`npm test`, `git status`). Private package-script names and arguments are never shown:
-  `npm acme-private-deploy` is labeled `npm`. Complex shell syntax that cannot be safely identified is labeled `bash`.
-- Tool names, MCP server names (`mcp:<server>`), and directly executed script file names (`./deploy.sh` → `deploy.sh`) are shown as-is (names over 40 chars or matching secret patterns show as `<redacted>`).
-  Unknown block type names may appear under `meta.unknownBlockTypes`.
+  `npm acme-private-deploy` is labeled `npm`. Directly executed scripts show as the file name only (`./deploy.sh` → `deploy.sh`). Complex shell syntax that cannot be safely identified is labeled `bash`; secret-like program names show as `<redacted>`.
+- Tool names and MCP server names (`mcp:<server>`) are shown as-is when identifier-like (letters, digits, `_ . : -`, 1–40 chars); empty or longer names, names matching secret patterns, or names containing folders, spaces or other separators show as `<redacted>` (`mcp:<redacted>` keeps the prefix).
+  Unknown block type names may appear under `meta.unknownBlockTypes` (non-identifier-like, secret-like or over-long names show as `<redacted>`).
 - Session content is never printed, including in error messages.
 - Reporting a bug? Paste the `meta` block of `npx ctx-autopsy --json`. Please do not attach `.jsonl` files.
 - The first-request split reads request-shape records but shows only sizes (characters and counts).
