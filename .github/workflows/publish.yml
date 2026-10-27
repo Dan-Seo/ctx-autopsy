@@ -1,0 +1,46 @@
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.1.1)'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - run: |
+          REQ=11.5.1
+          CUR="$(npm -v)"
+          if [ "$(printf '%s\n%s\n' "$REQ" "$CUR" | sort -V | head -n1)" != "$REQ" ]; then
+            echo "Trusted Publishing needs npm $REQ or later. Current: $CUR"
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag must look like vX.Y.Z, got: $TAG"
+            exit 1
+          fi
+          VER="v$(node -p "require('./package.json').version")"
+          if [ "$VER" != "$TAG" ]; then
+            echo "tag ($TAG) does not match package.json ($VER)"
+            exit 1
+          fi
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+      - run: npm test
+      - run: npm publish
