@@ -119,7 +119,8 @@ function toolGroup(name) {
   if (name === 'Bash') return 'Bash';
   if (typeof name !== 'string') return '?';
   const m = /^mcp__(.+?)__/.exec(name);
-  return m ? 'mcp:' + clean(m[1]) : clean(name);
+  if (m) return 'mcp:' + (/^[A-Za-z0-9_.:-]{1,40}$/.test(m[1]) ? clean(m[1]) : '<redacted>');
+  return /^[A-Za-z0-9_.:-]{1,40}$/.test(name) ? clean(name) : '<redacted>';
 }
 
 function resultLabel(name, input, isError) {
