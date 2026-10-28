@@ -1,6 +1,6 @@
 {
   "name": "ctx-autopsy",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "What ate your Claude Code context window? Ranks the biggest Bash outputs, file reads and re-reads across local sessions. Offline, zero-dependency CLI.",
   "bin": {
     "ctx-autopsy": "cli.js"
