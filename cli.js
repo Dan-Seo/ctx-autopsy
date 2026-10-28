@@ -54,15 +54,17 @@ const SUBCOMMANDS = new Map(Object.entries({
 // A bounded lexer for simple commands, not a shell interpreter. Ambiguous syntax returns no label.
 function commandWords(cmd) {
   if (typeof cmd !== 'string' || cmd.length > 2000) return null;
-  let words = [], word = '', quote = '', started = false, plain = true, assignment = false;
+  let words = [], word = '', quote = '', started = false, plain = true, assignment = false, esc = false;
   const endWord = () => {
-    if (started) words.push({ word, assignment });
-    word = ''; started = false; plain = true; assignment = false;
+    if (started) words.push({ word, assignment, esc });
+    word = ''; started = false; plain = true; assignment = false; esc = false;
   };
   const endCommand = () => {
     endWord();
     const first = words.findIndex(w => !w.assignment);
-    const command = first < 0 || words[first].word === 'cd' ? null : words.slice(first).map(w => w.word);
+    // An unquoted escape in the program word (e.g. a Windows path) mashes folders
+    // into the name, so the program is unidentifiable.
+    const command = first < 0 || words[first].word === 'cd' || words[first].esc ? null : words.slice(first).map(w => w.word);
     words = [];
     return command;
   };
@@ -73,6 +75,7 @@ function commandWords(cmd) {
     if (c === '\\' && quote !== "'") {
       const next = cmd[i + 1];
       if (next === undefined) return null;
+      if (!quote) esc = true;
       if (quote === '"' && !['$', '`', '"', '\\', '\n'].includes(next)) { word += c; continue; }
       i++;
       if (next !== '\n') { word += next; started = true; plain = false; }
@@ -171,7 +174,8 @@ function resultText(content, onUnknown) {
     else if (c && c.type === 'tool_reference') refs++; // the loaded definition is not in the log
     else if (c && c.type === 'search_result' && Array.isArray(c.content)) {
       stack.push({ blocks: c.content, index: 0 });
-    } else unknown(c && typeof c.type === 'string' ? c.type : 'invalid_tool_result_block');
+    } else if (c && c.type === 'search_result') unknown('invalid_search_result_content');
+    else unknown(c && typeof c.type === 'string' ? c.type : 'invalid_tool_result_block');
   }
   return { chars, images, refs, hash: h.digest('hex'), complete };
 }
@@ -193,7 +197,7 @@ function feedLine(r, st, line) {
   if (line === null) { r.oversizeLines++; return; }
   let o;
   try { o = JSON.parse(line); } catch { r.badLines++; return; } // never print the error: it can echo content
-  if (!o || typeof o !== 'object') { r.badLines++; return; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) { r.badLines++; return; } // only record objects count
   try { feedRecord(r, st, o); } catch { r.badLines++; } // odd shapes (e.g. objects where strings belong)
 }
 

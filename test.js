@@ -468,3 +468,26 @@ test('text mixed with tool_reference is measured and counted, nothing unknown', 
   assert.strictEqual(JSON.stringify(s.meta.unknownBlockTypes), '{}');
   assert.strictEqual(s.meta.suspect, false);
 });
+
+// ---- robustness regressions (ctx-pm 2026-10-28) ----
+test('a top-level JSON array is a bad line like other non-record values', () => {
+  const s = analyze([{ lines: ['[1,2]', '[]', '42', '"x"', 'null'] }]);
+  assert.strictEqual(s.meta.badLines, 5);
+});
+
+test('unquoted backslash paths never mash server or folder names into the Bash label', () => {
+  assert.strictEqual(bashLabel('\\\\fileserver\\share\\run.sh --x'), 'bash');
+  assert.strictEqual(bashLabel('share\\dir\\run.sh --x'), 'bash');
+  assert.strictEqual(bashLabel('"\\\\fileserver\\share\\run.sh" --x'), 'run.sh');
+  assert.strictEqual(bashLabel('"C:\\Tools\\run.exe" --x'), 'run');
+  const s = A([U('a', 'Bash', { command: '\\\\fileserver\\share\\run.sh --x' }), R('a', 'x'.repeat(25000))]);
+  assert.strictEqual(s.top[0].label, 'Bash  bash');
+});
+
+test('a search_result with non-array content keeps its own invalid-content key', () => {
+  const s = A([U('a', 'mcp__d__search', {}), R('a', [{ type: 'search_result', content: 'oops' }])]);
+  assert.strictEqual(s.summary.textChars, 0);
+  assert.strictEqual(s.meta.unknownBlockTypes.invalid_search_result_content, 1);
+  assert.strictEqual(s.meta.unknownBlockTypes.search_result, undefined);
+  assert.strictEqual(s.meta.suspect, true);
+});
