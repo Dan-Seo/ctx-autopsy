@@ -1,0 +1,2 @@
+{"type":"assistant","timestamp":"2026-10-26T09:00:00Z","version":"2.1.280","message":{"content":[{"type":"tool_use","id":"o-b1","name":"Bash","input":{"command":"git status"}}],"usage":{"input_tokens":60000}}}
+{"type":"user","timestamp":"2026-10-26T09:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"o-b1","content":"clean"}]}}

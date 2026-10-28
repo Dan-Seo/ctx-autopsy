@@ -142,14 +142,41 @@ function newReport(opts = {}) {
     top: [],               // [{label, chars}]
     rereads: { count: 0, chars: 0, files: new Map() },
     startCtx: [],          // first-request input tokens, including the user's message, per main session
+    splitParts: [],        // per-session first-request shape measurements
+    mainFirst: new Map(),  // sessionKey + read key + hash -> earliest main read time
+    subById: new Map(),    // tool_use id -> one subagent read candidate
   };
 }
 
-function newFileState(isSubagent) {
-  return { isSubagent, uses: new Map(), reads: new Map(), sawFirstUsage: false };
+function newFileState(isSubagent, sessionKey = null) {
+  return { isSubagent, sessionKey, uses: new Map(), reads: new Map(), sawFirstUsage: false,
+    shapes: new Map(), firstReq: null, firstUsageTokens: null, pushedStartCtx: false };
 }
 
 const num = x => (Number.isFinite(x) && x >= 0 ? x : 0); // usage fields come from an undocumented format
+
+const parseTsMs = t => typeof t === 'number' && Number.isFinite(t) ? t : typeof t === 'string' && Number.isFinite(Date.parse(t)) ? Date.parse(t) : Infinity;
+
+// Sizes only; never throws and never keeps names, text, or hashes.
+function measureShape(shape) {
+  try {
+    let sysC = 0;
+    if (shape && Array.isArray(shape.system))
+      for (const el of shape.system) if (el && typeof el.text === 'string') sysC += el.text.length;
+    let toolC = 0, mcpC = 0, count = 0, ok = false;
+    if (shape && Array.isArray(shape.tools)) {
+      count = shape.tools.length;
+      try { toolC = JSON.stringify(shape.tools).length; ok = true; } catch { toolC = 0; }
+      if (ok) for (const el of shape.tools) {
+        if (el && typeof el.name === 'string' && el.name.startsWith('mcp__'))
+          try { mcpC += JSON.stringify(el).length; } catch { /* skip this piece */ }
+      }
+    }
+    return { sysC, toolC, builtinC: Math.max(0, toolC - mcpC), mcpC, count };
+  } catch {
+    return { sysC: 0, toolC: 0, builtinC: 0, mcpC: 0, count: 0 };
+  }
+}
 
 function verCmp(a, b) {
   const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
@@ -207,6 +234,12 @@ function feedRecord(r, st, o) {
     if (!r.ccMax || verCmp(o.version, r.ccMax) > 0) r.ccMax = o.version;
   }
   if (o.type === 'system' && o.subtype === 'compact_boundary') { st.reads.clear(); return; }
+  if (o.type === 'api-request-shape' && !st.isSubagent && typeof o.shapeHash === 'string' && !st.shapes.has(o.shapeHash))
+    st.shapes.set(o.shapeHash, measureShape(o.shape));
+  if (o.type === 'api-request' && !st.isSubagent && (o.agentId == null || o.agentId === '')) {
+    const ts = parseTsMs(o.timestamp);
+    if (!st.firstReq || ts < st.firstReq.tsMs) st.firstReq = { tsMs: ts, hash: o.shapeHash };
+  }
   if (o.type !== 'user' && o.type !== 'assistant') return; // attachments, snapshots, toolUseResult: not counted
 
   const m = o.message;
@@ -220,7 +253,8 @@ function feedRecord(r, st, o) {
       const total = num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
       if (total > 0) { // all-zero usage = synthetic error message, not a real first turn
         st.sawFirstUsage = true;
-        if (inWindow) r.startCtx.push(total);
+        st.firstUsageTokens = total;
+        if (inWindow) { r.startCtx.push(total); st.pushedStartCtx = true; }
       }
     }
     for (const b of m.content) {
@@ -248,6 +282,19 @@ function feedRecord(r, st, o) {
       ? [fp, num(use.input.offset), num(use.input.limit)].join('|') : null;
     const reread = !!readKey && st.reads.get(readKey) === hash; // same range, identical text: nothing changed
     if (readKey) st.reads.set(readKey, hash);
+    if (readKey && st.sessionKey) {
+      const t = parseTsMs(o.timestamp);
+      if (!st.isSubagent) {
+        if (Number.isFinite(t)) {
+          const kk = st.sessionKey + '\n' + readKey + '\n' + hash;
+          if (!(r.mainFirst.get(kk) <= t)) r.mainFirst.set(kk, t);
+        }
+      } else if (inWindow) {
+        const cand = { sk: st.sessionKey, k: readKey, h: hash, t, chars, fp };
+        const cur = r.subById.get(b.tool_use_id);
+        if (!cur || cand.t < cur.t || (cand.t === cur.t && cand.sk < cur.sk)) r.subById.set(b.tool_use_id, cand);
+      }
+    }
     if (!inWindow || duplicate) continue; // copied history updates state but is only measured once
 
     r.images += images;
@@ -270,12 +317,19 @@ function feedRecord(r, st, o) {
 }
 
 // Convenience for tests: analyze in-memory files.
+function feedEnd(r, st) {
+  if (st.isSubagent || !st.pushedStartCtx || !st.firstReq || typeof st.firstReq.hash !== 'string') return;
+  const m = st.shapes.get(st.firstReq.hash);
+  if (m) r.splitParts.push({ ...m, firstTokens: st.firstUsageTokens });
+}
+
 function analyze(files, opts) {
   const r = newReport(opts);
   for (const f of files) {
-    const st = newFileState(!!f.subagent);
+    const st = newFileState(!!f.subagent, typeof f.sessionKey === 'string' ? f.sessionKey : null);
     r.files++; f.subagent ? r.subagentFiles++ : r.sessions++;
     for (const line of f.lines) feedLine(r, st, line);
+    feedEnd(r, st);
   }
   return summarize(r);
 }
@@ -295,6 +349,8 @@ function tips(s) {
     'If you pipe, keep the exit code: set -o pipefail; npm test 2>&1 | tail -50');
   if (read && read.pct >= 20) out.push('Read output is a big share. Ask for line ranges (Read with offset/limit) instead of whole files.');
   if (s.rereads.count) out.push('Unchanged files were re-read. Put the key facts in CLAUDE.md or point Claude at exact lines.');
+  if (s.rereads.subagent?.count >= 2 && s.rereads.subagent.chars >= BIG && s.rereads.subagent.chars * 10 >= s.rereads.subagent.readChars * 3)
+    out.push('Subagents re-read files the main session already had. Pass the key facts in the subagent prompt instead of letting them re-read shared files.');
   if (s.byTool.some(t => t.tool.startsWith('mcp:') && t.pct >= 10)) out.push('An MCP server returns a lot of text. /usage shows its share; turn off unused servers with /mcp.');
   if (s.startingContext.medianTokens) out.push('First-request input includes your message. Use /context to inspect CLAUDE.md, MCP and skill sizes.');
   return out;
@@ -302,6 +358,32 @@ function tips(s) {
 
 function summarize(r) {
   const pct = n => r.textChars ? Math.round((n / r.textChars) * 1000) / 10 : null;
+  const round = Math.round;
+  let subN = 0, subC = 0, subRead = 0;
+  const subF = new Map();
+  for (const sub of r.subById.values()) {
+    subRead += sub.chars;
+    const mt = r.mainFirst.get(sub.sk + '\n' + sub.k + '\n' + sub.h);
+    if (Number.isFinite(sub.t) && mt !== undefined && mt < sub.t) {
+      subN++; subC += sub.chars;
+      const l = fileLabel(sub.fp);
+      subF.set(l, (subF.get(l) || 0) + 1);
+    }
+  }
+  const lt = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const subagent = { count: subN, chars: subC, readChars: subRead,
+    files: [...subF].map(([file, count]) => ({ file, count })).sort((a, b) => b.count - a.count || lt(a.file, b.file)).slice(0, 5) };
+  const split = !r.splitParts.length ? null : {
+    sessions: r.splitParts.length,
+    systemChars: median(r.splitParts.map(p => p.sysC)),
+    toolsChars: median(r.splitParts.map(p => p.toolC)),
+    toolCount: median(r.splitParts.map(p => p.count)),
+    systemTokens: median(r.splitParts.map(p => round(p.sysC / 3))),
+    toolsTokens: median(r.splitParts.map(p => round(p.toolC / 3))),
+    toolsBuiltinTokens: median(r.splitParts.map(p => round(p.builtinC / 3))),
+    toolsMcpTokens: median(r.splitParts.map(p => round(p.mcpC / 3))),
+    restTokens: median(r.splitParts.map(p => Math.max(0, round(p.firstTokens - (p.sysC + p.toolC) / 3)))),
+  };
   const s = {
     schemaVersion: SCHEMA_VERSION,
     toolVersion: VERSION,
@@ -314,8 +396,9 @@ function summarize(r) {
       .sort((a, b) => b.chars - a.chars),
     top: r.top,
     rereads: { count: r.rereads.count, chars: r.rereads.chars,
-      files: [...r.rereads.files].map(([file, count]) => ({ file, count })).sort((a, b) => b.count - a.count).slice(0, 5) },
-    startingContext: { medianTokens: median(r.startCtx), sessions: r.startCtx.length },
+      files: [...r.rereads.files].map(([file, count]) => ({ file, count })).sort((a, b) => b.count - a.count).slice(0, 5),
+      subagent },
+    startingContext: { medianTokens: median(r.startCtx), sessions: r.startCtx.length, split },
     meta: {
       node: process.version, platform: process.platform,
       claudeCodeVersions: r.ccMin ? [r.ccMin, r.ccMax] : null,
@@ -407,11 +490,23 @@ function render(s, days, tty) {
       L.push(b(`Re-reads of unchanged files: ${s.rereads.count}`) + dim(` (${k(s.rereads.chars)} chars)`));
       for (const f of s.rereads.files) L.push(`  ${String(f.count).padStart(4)}x  ${f.file}`);
     }
+    if (s.rereads.subagent.count > 0) {
+      const n = s.rereads.subagent.count, chars = s.rereads.subagent.chars;
+      L.push('', b(`Subagent re-reads of main-session files: ${n}`) + dim(` (${k(chars)} chars)`));
+      for (const f of s.rereads.subagent.files) L.push(`  ${String(f.count).padStart(4)}x  ${f.file}`);
+    }
   }
   if (sm.images) L.push('', dim(`Images/PDFs in tool results: ${sm.images} (not counted above)`));
   if (sm.toolReferences && !sm.images) L.push('');
   if (sm.toolReferences) L.push(dim(`Tool definitions loaded by tool search: ${sm.toolReferences} (size not in logs, not counted above)`));
-  if (s.startingContext.medianTokens) L.push(dim(`First-request input: median ${k(s.startingContext.medianTokens)} tokens over ${s.startingContext.sessions} sessions (includes your message)`));
+  if (s.startingContext.medianTokens) {
+    L.push(dim(`First-request input: median ${k(s.startingContext.medianTokens)} tokens over ${s.startingContext.sessions} sessions (includes your message)`));
+    const split = s.startingContext.split;
+    if (split) {
+      const n = split.sessions;
+      L.push(dim(`  first-request split (2.1.310+, ${n} session${n === 1 ? '' : 's'}): system ~${k(split.systemTokens)} · tools ~${k(split.toolsTokens)} (builtin ~${k(split.toolsBuiltinTokens)} · mcp ~${k(split.toolsMcpTokens)}) · rest ~${k(split.restTokens)} tokens (±50%)`));
+    }
+  }
   if (s.tips.length) {
     L.push('', b('Try'));
     for (const t of s.tips) L.push(`  - ${t}`);
@@ -461,10 +556,20 @@ async function main(argv) {
   for (const f of files) {
     let size;
     try { const st = fs.statSync(f); if (st.mtimeMs < since) continue; size = st.size; } catch { r.skippedFiles++; continue; }
-    const sub = path.relative(root, f).split(path.sep).includes('subagents');
-    const st = newFileState(sub);
+    const segs = path.relative(root, f).split(path.sep);
+    const sub = segs.includes('subagents');
+    let sessionKey = null;
+    if (!sub) {
+      const rel = segs.join('/');
+      sessionKey = rel.endsWith('.jsonl') ? rel.slice(0, -'.jsonl'.length) : rel;
+    } else {
+      const head = segs.slice(0, segs.indexOf('subagents'));
+      if (head.length >= 2) sessionKey = head.join('/');
+    }
+    const st = newFileState(sub, sessionKey);
     try {
       for await (const line of readLines(f, size)) feedLine(r, st, line);
+      feedEnd(r, st);
       r.files++; sub ? r.subagentFiles++ : r.sessions++;
     } catch { r.skippedFiles++; } // EBUSY/EACCES etc: skip this file only
   }
@@ -473,7 +578,7 @@ async function main(argv) {
   return 0;
 }
 
-module.exports = { analyze, bashLabel, fileLabel, readLines, main, tips };
+module.exports = { analyze, bashLabel, fileLabel, readLines, main, render, tips };
 
 if (require.main === module) {
   process.stdout.on('error', e => { if (e.code === 'EPIPE') process.exit(0); });
